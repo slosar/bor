@@ -49,7 +49,7 @@ Bor uses [mu](https://djcbsoftware.nl/code/mu/) for email access under the hoold
 ### From PyPI
 
 ```bash
-pip install bor
+pip install bormail
 ```
 
 ### From source
