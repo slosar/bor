@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bor"
-version = "0.1.0"
+version = "0.3.0"
 description = "Terminal-based email reader using mu and textual"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = {file = "LICENSE"}
 authors = [
     {name = "Bor Development Team"}
 ]
@@ -59,10 +59,10 @@ all = [
 bor = "bor.app:main"
 
 [project.urls]
-Homepage = "https://github.com/your-repo/bor"
-Documentation = "https://github.com/your-repo/bor#readme"
-Repository = "https://github.com/your-repo/bor"
-Issues = "https://github.com/your-repo/bor/issues"
+Homepage = "https://github.com/slosar/bor"
+Documentation = "https://github.com/slosar/bor#readme"
+Repository = "https://github.com/slosar/bor"
+Issues = "https://github.com/slosar/bor/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

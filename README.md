@@ -1,6 +1,6 @@
 # Bor - Terminal Email Reader
 
-[![Tests](https://github.com/slosar/bor/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/slosar/bor/actions/workflows/tests.yml)
+[![Tests](https://github.com/slosar/bor/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/slosar/bor/actions/workflows/tests.yml) [![PyPI](https://img.shields.io/pypi/v/bor.svg)](https://pypi.org/project/bor/)
 
 Bor means pine in Slovenian. Bor is also an email reader inspired by [pine](https://en.wikipedia.org/wiki/Pine_%28email_client%29).
 
@@ -46,6 +46,12 @@ Bor uses [mu](https://djcbsoftware.nl/code/mu/) for email access under the hoold
 
 ## Installation
 
+### From PyPI
+
+```bash
+pip install bor
+```
+
 ### From source
 
 ```bash
@@ -72,6 +78,13 @@ sudo pacman -S mu
 # Install mu on macOS
 brew install mu
 ```
+
+## Release
+
+1. Update the version in `pyproject.toml`.
+2. Create a git tag like `v0.1.1` and publish a GitHub Release.
+3. The Build workflow will upload the sdist and wheel to PyPI.
+    - Configure PyPI Trusted Publishing for `slosar/bor` before the first release.
 
 ## Configuration
 
@@ -207,6 +220,10 @@ date:1w..now
 # Combine queries
 from:john subject:meeting flag:unread
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE).
 
 See the [mu query documentation](https://djcbsoftware.nl/code/mu/mu4e/Queries.html) for more.
 
