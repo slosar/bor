@@ -1,8 +1,10 @@
 # Bor - Terminal Email Reader
 
+[![Tests](https://github.com/slosar/bor/actions/workflows/tests.yml/badge.svg)](https://github.com/slosar/bor/actions/workflows/tests.yml)
+
 Bor means pine in Slovenian. Bor is also an email reader inspired by [pine](https://en.wikipedia.org/wiki/Pine_%28email_client%29).
 
-I used to use pine and later its derviatives (alpine, realpine) until it became unsustainable. I switched to mu4e over a decade ago, but while I liked many things, it was never quite perfect.
+I used to use pine and later its derivatives (alpine, realpine) until it became unsustainable. I switched to mu4e over a decade ago, but while I liked many things, it was never quite perfect.
 
 A few years ago I switched away from emacs to VSCode and with the advent of AI coding I finally bite the bullet and made my very own mail client that works exactly the way I want it. Think of bor as pine dragged (by its feet) into 2025.
 
@@ -35,6 +37,12 @@ Bor uses [mu](https://djcbsoftware.nl/code/mu/) for email access under the hoold
 - [Textual](https://textual.textualize.io/) library
 - Optional: html2text for HTML email rendering
 - Optional: kitty terminal for image preview
+
+
+## Known issues
+
+- no support for folders. You can mu search with maildir:/folder, but all archived messages go to the archived folder. This is how my work-flow works. Feel free to add and make pull request.
+- Clicking with mouse on the link does not work. For emails with one or two links, 'O' shortcut is preferrable, but for complex long messages, clicking on the link would be better.
 
 ## Installation
 
