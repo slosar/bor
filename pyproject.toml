@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bor"
+version = "0.1.0"
+description = "Terminal-based email reader using mu and textual"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Bor Development Team"}
+]
+keywords = ["email", "terminal", "tui", "mu", "maildir"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Email :: Email Clients (MUA)",
+]
+
+dependencies = [
+    "textual>=0.40.0",
+    "tomli>=2.0.0;python_version<'3.11'",
+    "pyperclip>=1.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+html = [
+    "html2text>=2020.1.16",
+]
+images = [
+    "Pillow>=9.0.0",
+]
+keyring = [
+    "keyring>=23.0.0",
+]
+all = [
+    "html2text>=2020.1.16",
+    "keyring>=23.0.0",
+    "Pillow>=9.0.0",
+]
+
+[project.scripts]
+bor = "bor.app:main"
+
+[project.urls]
+Homepage = "https://github.com/your-repo/bor"
+Documentation = "https://github.com/your-repo/bor#readme"
+Repository = "https://github.com/your-repo/bor"
+Issues = "https://github.com/your-repo/bor/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["bor*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

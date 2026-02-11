@@ -1,0 +1,126 @@
+# Example Bor Configuration File
+# Copy to ~/.config/bor.conf and customize
+
+[general]
+# Maximum number of messages to display in message list
+max_messages = 400
+
+# Date format for message list (strftime format)
+date_format = "%Y-%m-%d %H:%M"
+
+# Short date format for compact view
+short_date_format = "%m/%d"
+
+# Time format for today's messages
+time_format = "%H:%M"
+
+[folders]
+# Maildir folders (relative to mu root maildir)
+inbox = "/INBOX"
+archive = "/Archive"
+drafts = "/Drafts"
+sent = "/Sent"
+trash = "/Trash"
+
+[smtp]
+# SMTP server settings
+server = "smtp.example.com"
+port = 587
+username = "user@example.com"
+# Password can be omitted - will prompt or use system keyring
+# password = "your-password"
+use_tls = true
+use_starttls = true
+
+[identity]
+# Default identity
+name = "Your Name"
+email = "user@example.com"
+# Optional organization
+organization = ""
+# Signature (use triple quotes for multiline)
+signature = """
+--
+Your Name
+"""
+
+[colors]
+# Colors for message display
+# Valid color names: blue, green, red, yellow, magenta, cyan, dark_orange, orange1, etc.
+# You can also use hex colors like "#ff8c00"
+unread = "blue"
+important = "dark_orange"
+marked = "reverse"
+header = "bold"
+quoted = "italic dim"
+
+[sync]
+# External synchronization command
+command = "mbsync -a"
+# Alternative examples:
+# command = "offlineimap"
+# command = "fetchmail && mu index"
+
+[threading]
+# Enable threading by default
+enabled = true
+# Thread indicator character
+indicator = "↳"
+
+[keybindings]
+# Custom keybindings can be added here
+# Format: action = "key"
+
+[aliases]
+# Tab autocompletions in compose mode
+# Format: letter = "expanded text"
+# Example: pressing 'r' then Tab expands to "Best regards,"
+r = "Best regards,"
+t = "Thank you for your email."
+k = "Kind regards,"
+
+[email_aliases]
+# Email address aliases for quick addressing
+# Works like .mailrc aliases
+# Example:
+# john = "john.doe@example.com"
+# team = "alice@example.com, bob@example.com"
+
+[display]
+# Message list columns
+# Available: date, from, to, subject, flags, size, maildir
+columns = ["date", "from", "subject", "flags"]
+
+# Column widths (0 = auto/fill remaining space)
+date_width = 12
+from_width = 20
+subject_width = 0
+flags_width = 6
+
+# Flags symbols
+flag_unread = "●"
+flag_replied = "↩"
+flag_forwarded = "→"
+flag_flagged = "⚑"
+flag_attachment = "📎"
+flag_encrypted = "🔒"
+flag_signed = "✓"
+
+[html]
+# HTML rendering for HTML-only emails
+# Options: html2text, rich, links, w3m
+renderer = "html2text"
+# Open links in browser
+open_links_in_browser = true
+
+[attachments]
+# Default directory for saving attachments
+save_directory = "~/Downloads"
+# Use kitty icat for image preview (if available)
+use_kitty_icat = true
+
+[editor]
+# External editor for compose (optional)
+# Leave empty to use built-in editor
+external = ""
+# Example: external = "vim"
