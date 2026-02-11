@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "bor"
+name = "bormail"
 version = "0.3.1"
 description = "Terminal-based email reader using mu and textual"
 readme = "README.md"

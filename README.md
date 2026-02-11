@@ -1,6 +1,6 @@
 # Bor - Terminal Email Reader
 
-[![Tests](https://github.com/slosar/bor/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/slosar/bor/actions/workflows/tests.yml) [![PyPI](https://img.shields.io/pypi/v/bor.svg)](https://pypi.org/project/bor/)
+[![Tests](https://github.com/slosar/bor/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/slosar/bor/actions/workflows/tests.yml) [![PyPI](https://img.shields.io/pypi/v/bormail.svg)](https://pypi.org/project/bormail/)
 
 Bor means pine in Slovenian. Bor is also an email reader inspired by [pine](https://en.wikipedia.org/wiki/Pine_%28email_client%29).
 
