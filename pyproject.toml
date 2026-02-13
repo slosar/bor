@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bormail"
-version = "0.3.3"
+version = "0.4.0-dev"
 description = "Terminal-based email reader using mu and textual"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -11,6 +11,7 @@ import os
 import re
 import smtplib
 import tempfile
+import shutil
 from datetime import datetime
 from email.header import Header
 from email.message import EmailMessage as StdEmailMessage
@@ -19,7 +20,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email import encoders
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
 
 from textual import events
 from textual.app import ComposeResult
@@ -943,22 +944,75 @@ class ComposeWidget(BaseTab):
         # Forward all attachments by extracting them into a temp directory
         if msg.attachments:
             target_dir = Path(tempfile.mkdtemp(prefix="bor-forward-"))
-            extracted: List[Path] = []
-            for attachment in msg.attachments:
-                part_index = attachment.get("part_index") if isinstance(attachment, dict) else None
-                if not part_index:
-                    continue
-                extracted_path = self.bor_app.mu.extract_attachment(
-                    msg.path,
-                    int(part_index),
-                    str(target_dir)
-                )
-                if extracted_path:
-                    path = Path(extracted_path)
-                    if path not in extracted:
-                        extracted.append(path)
+            extracted = self._collect_forward_attachments(
+                msg.path,
+                msg.attachments,
+                target_dir,
+                self.bor_app.mu.extract_attachment
+            )
             if extracted:
                 self.attachments.extend(extracted)
+
+    @staticmethod
+    def _collect_forward_attachments(
+        message_path: str,
+        attachments: List[Dict[str, object]],
+        target_dir: Path,
+        extract_func: Callable[[str, int, str], Optional[str]]
+    ) -> List[Path]:
+        """
+        Extract attachments for forwarding without overwriting duplicates.
+
+        Args:
+            message_path: Path to the source message
+            attachments: Attachment metadata list
+            target_dir: Directory to place extracted attachments
+            extract_func: Function to extract a single attachment
+
+        Returns:
+            List of extracted attachment paths in target_dir
+        """
+        extracted: List[Path] = []
+        seen_names: Dict[str, int] = {}
+
+        for index, attachment in enumerate(attachments):
+            part_index = attachment.get("part_index") if isinstance(attachment, dict) else None
+            if not part_index:
+                continue
+
+            staging_dir = target_dir / f"part-{part_index}-{index}"
+            staging_dir.mkdir(parents=True, exist_ok=True)
+
+            extracted_path = extract_func(message_path, int(part_index), str(staging_dir))
+            if not extracted_path:
+                continue
+
+            path = Path(extracted_path)
+            original_name = path.name
+            current_count = seen_names.get(original_name, 0)
+            seen_names[original_name] = current_count + 1
+
+            if current_count:
+                new_name = f"{path.stem} ({current_count + 1}){path.suffix}"
+            else:
+                new_name = original_name
+
+            final_path = target_dir / new_name
+            while final_path.exists():
+                current_count = seen_names.get(original_name, 1) + 1
+                seen_names[original_name] = current_count
+                new_name = f"{path.stem} ({current_count}){path.suffix}"
+                final_path = target_dir / new_name
+
+            shutil.move(str(path), str(final_path))
+            extracted.append(final_path)
+
+            try:
+                staging_dir.rmdir()
+            except OSError:
+                pass
+
+        return extracted
 
     def _init_draft(self) -> None:
         """Initialize content from draft."""
