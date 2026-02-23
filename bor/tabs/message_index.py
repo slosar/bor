@@ -712,6 +712,18 @@ class MessageIndexWidget(BaseTab):
         
         status.update(f"Index updated - {len(self.messages)} messages")
 
+    async def refresh_current_view(self) -> None:
+        """Refresh current query results and preserve cursor position."""
+        current_index = self._get_current_index()
+
+        if self.current_query:
+            await self.search(self.current_query)
+        else:
+            config = get_config()
+            await self.search(f'maildir:"{config.folders.inbox}"')
+
+        self._restore_cursor(current_index)
+
     def action_mark_message(self) -> None:
         """Mark/unmark the current message."""
         idx = self._get_current_index()

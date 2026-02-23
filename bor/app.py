@@ -167,6 +167,7 @@ class BorApp(App):
         self._current_index: int = 0
         self._marked_messages: set = set()
         self._threading_enabled: bool = self.config.threading.enabled
+        self._active_tab_id: str = "tab-0"
 
     def compose(self) -> ComposeResult:
         """Create the application layout."""
@@ -258,6 +259,32 @@ class BorApp(App):
         if 0 <= index < len(tab_ids):
             tabs.active = tab_ids[index]
             self.call_later(lambda: self._focus_active_tab())
+
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        """Refresh message index whenever returning to tab-0."""
+        tab_id = event.pane.id or ""
+        previous_tab_id = self._active_tab_id
+        self._active_tab_id = tab_id
+
+        if tab_id == "tab-0" and previous_tab_id != "tab-0":
+            self.run_worker(
+                self._refresh_index_on_return(),
+                name="refresh-index-on-return",
+                group="index-refresh",
+                exclusive=True,
+            )
+
+    async def _refresh_index_on_return(self) -> None:
+        """Refresh message index data after returning from another tab."""
+        from bor.tabs.message_index import MessageIndexWidget
+
+        try:
+            widget = self.query_one(MessageIndexWidget)
+        except Exception:
+            return
+
+        await widget.refresh_current_view()
+        await self._focus_message_index()
 
     def _is_compose_active(self) -> bool:
         """Check if the active tab is a compose tab."""

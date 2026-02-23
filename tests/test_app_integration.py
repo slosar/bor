@@ -378,6 +378,29 @@ class TestFolderShortcuts:
                     # Should trigger archive search
 
 
+class TestIndexRefreshOnReturn:
+    """Test index refresh behavior when returning from secondary tabs."""
+
+    @pytest.mark.asyncio
+    async def test_returning_from_compose_refreshes_index(self, mock_mu_interface, mock_config):
+        """Returning to tab-0 from compose should refresh message index query."""
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    initial_find_calls = mock_mu_interface.find.call_count
+
+                    await pilot.press("c")
+                    await pilot.pause()
+
+                    await pilot.press("ctrl+l", "x")
+                    await pilot.pause()
+
+                    assert mock_mu_interface.find.call_count > initial_find_calls
+
+
 class TestQuit:
     """Test quit functionality."""
 
