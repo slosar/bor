@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Callable, List, Optional, Set
+from rich.style import Style as RichStyle
 
 from textual import events
 from textual.app import ComposeResult
@@ -224,6 +225,24 @@ class FlagBar(Static):
     can_focus = True
 
 
+class MessageDataTable(DataTable):
+    """DataTable with row-level style support for marked rows."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.marked_rows: set[int] = set()
+        self.marked_style: str = "reverse"
+
+    def _get_row_style(self, row_index: int, base_style):
+        row_style = super()._get_row_style(row_index, base_style)
+        if row_index in self.marked_rows:
+            try:
+                return row_style + RichStyle.parse(self.marked_style)
+            except Exception:
+                return row_style + RichStyle.parse("reverse")
+        return row_style
+
+
 class MessageIndexWidget(BaseTab):
     """
     Message Index widget.
@@ -341,7 +360,7 @@ class MessageIndexWidget(BaseTab):
         with Vertical():
             with Container(classes="search-bar", id="search-bar"):
                 yield SearchInput(id="search-input")
-            yield DataTable(id="message-table", cursor_type="row")
+            yield MessageDataTable(id="message-table", cursor_type="row")
             yield ConfirmBar("", classes="confirm-bar", id="confirm-bar")
             yield FlagBar("", id="flag-bar")
             yield ReplyBar("", id="reply-bar")
@@ -350,7 +369,7 @@ class MessageIndexWidget(BaseTab):
 
     def on_mount(self) -> None:
         """Handle widget mount."""
-        table = self.query_one(DataTable)
+        table = self.query_one(MessageDataTable)
 
         # Add columns
         config = get_config()
@@ -361,6 +380,13 @@ class MessageIndexWidget(BaseTab):
 
         table.cursor_type = "row"
         table.zebra_stripes = True
+
+    def _sync_marked_rows_to_table(self) -> None:
+        """Synchronize marked rows and style to the DataTable."""
+        table = self.query_one(MessageDataTable)
+        table.marked_rows = set(self.marked_messages)
+        table.marked_style = get_config().colors.marked or "reverse"
+        table.refresh()
 
     async def search(self, query: str, threads: Optional[bool] = None) -> None:
         """
@@ -390,6 +416,7 @@ class MessageIndexWidget(BaseTab):
 
         # Refresh the table
         await self._refresh_table()
+        self._sync_marked_rows_to_table()
 
         # Update status
         self._update_status()
@@ -398,7 +425,7 @@ class MessageIndexWidget(BaseTab):
         """Refresh the message table with current messages."""
         from rich.text import Text
         
-        table = self.query_one(DataTable)
+        table = self.query_one(MessageDataTable)
         table.clear()
 
         config = get_config()
@@ -423,17 +450,10 @@ class MessageIndexWidget(BaseTab):
             if idx in thread_prefixes and thread_prefixes[idx]:
                 subject = f"{thread_prefixes[idx]} {subject}"
 
-            # Determine styling based on message state
-            # For marked messages, use "on <color>" for background to span cell width
+            # Determine text styling based on message state.
+            # Marked-row styling is handled at table row level.
             style = ""
-            if idx in self.marked_messages:
-                # Use reverse or background color for visibility
-                marked_style = config.colors.marked
-                if marked_style == "reverse":
-                    style = "reverse"
-                else:
-                    style = f"on {marked_style}" if not marked_style.startswith("on ") else marked_style
-            elif msg.is_flagged:
+            if msg.is_flagged:
                 style = f"bold {config.colors.important}"
             elif msg.is_unread:
                 style = f"bold {config.colors.unread}"
@@ -715,6 +735,7 @@ class MessageIndexWidget(BaseTab):
     async def refresh_current_view(self) -> None:
         """Refresh current query results and preserve cursor position."""
         current_index = self._get_current_index()
+        marked_ids = self._capture_marked_message_ids()
 
         if self.current_query:
             await self.search(self.current_query)
@@ -722,7 +743,35 @@ class MessageIndexWidget(BaseTab):
             config = get_config()
             await self.search(f'maildir:"{config.folders.inbox}"')
 
+        await self._restore_marked_messages(marked_ids)
         self._restore_cursor(current_index)
+
+    def _message_identity(self, message: EmailMessage) -> str:
+        """Return a stable identity for a message across index refreshes."""
+        return message.msgid or message.path
+
+    def _capture_marked_message_ids(self) -> set[str]:
+        """Capture stable identities for currently marked messages."""
+        marked_ids: set[str] = set()
+        for idx in self.marked_messages:
+            if 0 <= idx < len(self.messages):
+                marked_ids.add(self._message_identity(self.messages[idx]))
+        return marked_ids
+
+    async def _restore_marked_messages(self, marked_ids: set[str]) -> None:
+        """Restore marked messages after a refresh using stable identities."""
+        if not marked_ids:
+            return
+
+        self.marked_messages = {
+            idx
+            for idx, message in enumerate(self.messages)
+            if self._message_identity(message) in marked_ids
+        }
+        if self.marked_messages:
+            await self._refresh_table()
+        self._sync_marked_rows_to_table()
+        self._update_status()
 
     def action_mark_message(self) -> None:
         """Mark/unmark the current message."""
@@ -737,6 +786,7 @@ class MessageIndexWidget(BaseTab):
         # Update the row styling
         self._update_row_style(idx)
         self._update_status()
+        self._sync_marked_rows_to_table()
         # Move to next message
         self.action_cursor_down()
 
@@ -764,16 +814,10 @@ class MessageIndexWidget(BaseTab):
         if idx in thread_prefixes and thread_prefixes[idx]:
             subject = f"{thread_prefixes[idx]} {subject}"
         
-        # Determine styling
-        # For marked messages, use "on <color>" for background to span cell width
+        # Determine text styling.
+        # Marked-row styling is handled at table row level.
         style = ""
-        if idx in self.marked_messages:
-            marked_style = config.colors.marked
-            if marked_style == "reverse":
-                style = "reverse"
-            else:
-                style = f"on {marked_style}" if not marked_style.startswith("on ") else marked_style
-        elif msg.is_flagged:
+        if msg.is_flagged:
             style = f"bold {config.colors.important}"
         elif msg.is_unread:
             style = f"bold {config.colors.unread}"
@@ -865,6 +909,7 @@ class MessageIndexWidget(BaseTab):
                     msg = self.messages[idx]
                     self.bor_app.mu.move(msg.path, archive_folder)
             self.marked_messages.clear()
+            self._sync_marked_rows_to_table()
         else:
             # Archive current message
             msg = self._get_current_message()
@@ -952,6 +997,7 @@ class MessageIndexWidget(BaseTab):
         if self.marked_messages:
             self.marked_messages.clear()
             self._update_status()
+            self._sync_marked_rows_to_table()
         
         self.query_one(DataTable).focus()
 
@@ -1006,6 +1052,7 @@ class MessageIndexWidget(BaseTab):
                     msg = self.messages[idx]
                     self.bor_app.mu.move(msg.path, config.folders.trash)
             self.marked_messages.clear()
+            self._sync_marked_rows_to_table()
         else:
             msg = self._get_current_message()
             if msg:

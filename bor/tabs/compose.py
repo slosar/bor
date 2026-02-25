@@ -644,17 +644,21 @@ class ComposeWidget(BaseTab):
     }
 
     ComposeWidget .header-row {
-        height: 1;
+        height: 3;
         margin: 0;
     }
 
     ComposeWidget .header-label {
         width: 10;
+        height: 3;
         color: $text-muted;
+        content-align: left middle;
     }
 
     ComposeWidget .header-input {
         width: 1fr;
+        height: 3;
+        margin: 0;
     }
 
     ComposeWidget .body-container {

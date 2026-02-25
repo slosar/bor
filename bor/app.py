@@ -7,15 +7,18 @@ between different views (message index, message view, compose, etc.)
 
 from __future__ import annotations
 
+import argparse
+from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
 from textual import events
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, InvalidThemeError
 from textual.binding import Binding
 from textual.containers import Container
 from textual.widgets import TabbedContent, TabPane, Footer, Header
 
-from bor.config import get_config, Config
+from bor import __version__
+from bor.config import get_config, Config, load_config, set_config, apply_config_overrides
 from bor.mu import MuInterface, EmailMessage
 from bor.tabs.base import BaseTab
 
@@ -159,6 +162,14 @@ class BorApp(App):
         """Initialize the Bor application."""
         super().__init__()
         self.config: Config = get_config()
+        try:
+            self.theme = self.config.general.theme
+        except InvalidThemeError:
+            print(
+                f"Warning: Unknown theme '{self.config.general.theme}'. "
+                "Falling back to default 'textual-dark'."
+            )
+            self.theme = "textual-dark"
         self.mu: MuInterface = MuInterface()
         self._tab_counter: int = 0
         self._tabs: Dict[str, TabPane] = {}
@@ -556,10 +567,47 @@ class BorApp(App):
         return None
 
 
-def main() -> None:
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """Build CLI parser for Bor."""
+    parser = argparse.ArgumentParser(prog="bor", description="Bor terminal email reader")
+    parser.add_argument("--version", action="store_true", help="Display Bor version and exit")
+    parser.add_argument(
+        "--config",
+        type=str,
+        metavar="PATH",
+        help="Path to configuration file (defaults to ~/.config/bor.conf)",
+    )
+    parser.add_argument(
+        "--set",
+        action="append",
+        default=[],
+        metavar="SECTION.OPTION=VALUE",
+        help="Override a config option (can be passed multiple times)",
+    )
+    return parser
+
+
+def main(argv: Optional[list[str]] = None) -> int:
     """Main entry point for Bor application."""
+    parser = _build_arg_parser()
+    args = parser.parse_args(argv)
+
+    if args.version:
+        print(__version__)
+        return 0
+
+    config_path = Path(args.config).expanduser() if args.config else None
+    config = load_config(config_path)
+
+    try:
+        apply_config_overrides(config, args.set)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    set_config(config)
     app = BorApp()
     app.run()
+    return 0
 
 
 if __name__ == "__main__":

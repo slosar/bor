@@ -21,7 +21,12 @@ short_date_format = "%m/%d"
 
 # Time format for today's messages
 time_format = "%H:%M"
+
+# Textual UI theme
+theme = "textual-dark"
 ```
+
+`theme` accepts any registered Textual theme (for example `textual-dark`, `textual-light`, `nord`, `gruvbox`, `dracula`).
 
 ### [folders]
 
@@ -208,6 +213,7 @@ max_messages = 400
 date_format = "%Y-%m-%d %H:%M"
 short_date_format = "%m/%d"
 time_format = "%H:%M"
+theme = "textual-dark"
 
 [folders]
 inbox = "/INBOX"

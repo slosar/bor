@@ -14,6 +14,9 @@ short_date_format = "%m/%d"
 # Time format for today's messages
 time_format = "%H:%M"
 
+# Textual UI theme (e.g. textual-dark, textual-light, nord, gruvbox, dracula)
+theme = "textual-dark"
+
 [folders]
 # Maildir folders (relative to mu root maildir)
 inbox = "/INBOX"

@@ -239,6 +239,37 @@ class TestMessageView:
                     assert len(app._tabs) < initial_tabs or initial_tabs == 0
 
     @pytest.mark.asyncio
+    async def test_marked_messages_survive_open_and_return(self, mock_mu_interface, mock_config):
+        """Marked messages should persist after opening another message and returning."""
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+                from bor.tabs.message_index import MessageIndexWidget
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+
+                    index_widget = app.query_one(MessageIndexWidget)
+                    table = app.query_one(DataTable)
+                    table.move_cursor(row=0)
+
+                    # Mark first two messages (m moves cursor down after each mark)
+                    await pilot.press("m")
+                    await pilot.press("m")
+                    await pilot.pause()
+                    assert index_widget.marked_messages == {0, 1}
+
+                    # Open third message and return to index
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    await pilot.press("q")
+                    await pilot.pause()
+                    await pilot.pause()
+
+                    assert index_widget.marked_messages == {0, 1}
+
+    @pytest.mark.asyncio
     async def test_o_opens_selected_url(self, mock_mu_interface, mock_config):
         """Test that O prompts for URL selection when multiple links exist."""
         mock_mu_interface.view.return_value = MockEmailMessage(
