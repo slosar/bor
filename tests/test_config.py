@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from bor.config import (
+    apply_config_overrides,
     Config,
     GeneralConfig,
     FoldersConfig,
@@ -18,6 +19,7 @@ def test_default_config():
     """Test that default config is created correctly."""
     config = Config()
     assert config.general.max_messages == 400
+    assert config.general.theme == "textual-dark"
     assert config.folders.inbox == "/INBOX"
     assert config.smtp.port == 587
 
@@ -54,6 +56,7 @@ def test_load_config_from_file():
     toml_content = """
 [general]
 max_messages = 100
+theme = "nord"
 
 [folders]
 inbox = "/MyInbox"
@@ -74,6 +77,7 @@ t = "Thanks!"
         config = load_config(Path(f.name))
         
         assert config.general.max_messages == 100
+        assert config.general.theme == "nord"
         assert config.folders.inbox == "/MyInbox"
         assert config.smtp.server == "mail.example.com"
         assert config.smtp.port == 465
@@ -87,6 +91,7 @@ def test_general_config_defaults():
     assert general.date_format == "%Y-%m-%d %H:%M"
     assert general.short_date_format == "%m/%d"
     assert general.time_format == "%H:%M"
+    assert general.theme == "textual-dark"
 
 
 def test_folders_config_defaults():
@@ -97,3 +102,44 @@ def test_folders_config_defaults():
     assert folders.drafts == "/Drafts"
     assert folders.sent == "/Sent"
     assert folders.trash == "/Trash"
+
+
+def test_apply_config_overrides_basic_types():
+    """Test applying CLI overrides with common value types."""
+    config = Config()
+
+    apply_config_overrides(
+        config,
+        [
+            "general.max_messages=123",
+            "threading.enabled=false",
+            "folders.inbox=/MyInbox",
+        ],
+    )
+
+    assert config.general.max_messages == 123
+    assert config.threading.enabled is False
+    assert config.folders.inbox == "/MyInbox"
+
+
+def test_apply_config_overrides_dict_section():
+    """Test applying overrides to dictionary-backed config sections."""
+    config = Config()
+
+    apply_config_overrides(config, ["aliases.ty=Thanks!"])
+
+    assert config.aliases["ty"] == "Thanks!"
+
+
+def test_apply_config_overrides_invalid_key_errors():
+    """Test invalid override key raises ValueError."""
+    config = Config()
+
+    with pytest.raises(ValueError):
+        apply_config_overrides(config, ["general=100"])
+
+    with pytest.raises(ValueError):
+        apply_config_overrides(config, ["unknown.value=1"])
+
+    with pytest.raises(ValueError):
+        apply_config_overrides(config, ["general.unknown=1"])

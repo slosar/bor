@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from bor.mu import EmailMessage, EmailAddress
 from bor.tabs.compose import ComposeWidget, AddressInput
 import email.utils
@@ -195,3 +197,30 @@ def test_reply_all_excludes_self_from_cc() -> None:
     assert any("bob@example.com" in entry for entry in cc_list)
     assert any("david@example.com" in entry for entry in cc_list)
     assert all("charlie@example.com" not in entry for entry in cc_list)
+
+
+def test_forward_attachments_keep_duplicate_names(tmp_path: Path) -> None:
+    """Forwarding should keep all attachments with duplicate filenames."""
+    attachments = [
+        {"part_index": 1},
+        {"part_index": 2},
+    ]
+
+    def fake_extract(message_path: str, part_index: int, target_dir: str) -> str:
+        target = Path(target_dir)
+        target.mkdir(parents=True, exist_ok=True)
+        path = target / "file.txt"
+        path.write_text(f"part {part_index}")
+        return str(path)
+
+    result = ComposeWidget._collect_forward_attachments(
+        "/tmp/message",
+        attachments,
+        tmp_path,
+        fake_extract
+    )
+
+    names = sorted(path.name for path in result)
+    assert names == ["file (2).txt", "file.txt"]
+    assert (tmp_path / "file.txt").read_text() == "part 1"
+    assert (tmp_path / "file (2).txt").read_text() == "part 2"

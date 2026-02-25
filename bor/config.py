@@ -27,6 +27,7 @@ class GeneralConfig:
     date_format: str = "%Y-%m-%d %H:%M"
     short_date_format: str = "%m/%d"
     time_format: str = "%H:%M"
+    theme: str = "textual-dark"
 
 
 @dataclass
@@ -271,3 +272,58 @@ def reload_config() -> Config:
     global _config
     _config = load_config()
     return _config
+
+
+def set_config(config: Config) -> None:
+    """Set the global configuration instance."""
+    global _config
+    _config = config
+
+
+def _parse_override_value(raw_value: str) -> Any:
+    """Parse CLI override value using TOML scalar/array syntax when possible."""
+    try:
+        parsed = tomllib.loads(f"value = {raw_value}")
+        return parsed["value"]
+    except Exception:
+        return raw_value
+
+
+def apply_config_overrides(config: Config, overrides: List[str]) -> Config:
+    """
+    Apply CLI-style overrides to a config object.
+
+    Overrides must be in the form ``section.option=value``.
+    Example: ``general.max_messages=200``.
+    """
+    for override in overrides:
+        if "=" not in override:
+            raise ValueError(f"Invalid override '{override}': expected section.option=value")
+
+        key_path, raw_value = override.split("=", 1)
+        key_path = key_path.strip()
+        raw_value = raw_value.strip()
+
+        if "." not in key_path:
+            raise ValueError(
+                f"Invalid override key '{key_path}': expected section.option"
+            )
+
+        section_name, option_name = key_path.split(".", 1)
+
+        if not hasattr(config, section_name):
+            raise ValueError(f"Unknown config section '{section_name}'")
+
+        section = getattr(config, section_name)
+
+        if isinstance(section, dict):
+            section[option_name] = _parse_override_value(raw_value)
+            continue
+
+        if not hasattr(section, option_name):
+            raise ValueError(f"Unknown config option '{section_name}.{option_name}'")
+
+        parsed_value = _parse_override_value(raw_value)
+        setattr(section, option_name, parsed_value)
+
+    return config
