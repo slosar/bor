@@ -1003,7 +1003,7 @@ class ComposeWidget(BaseTab):
 
             final_path = target_dir / new_name
             while final_path.exists():
-                current_count = seen_names.get(original_name, 1) + 1
+                current_count = seen_names[original_name] + 1
                 seen_names[original_name] = current_count
                 new_name = f"{path.stem} ({current_count}){path.suffix}"
                 final_path = target_dir / new_name
