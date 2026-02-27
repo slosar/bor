@@ -1,7 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from bor.mu import EmailMessage, EmailAddress
-from bor.tabs.compose import ComposeWidget, AddressInput
+from bor.tabs.compose import ComposeWidget, AddressInput, ComposeTextArea
 import email.utils
 
 
@@ -224,3 +226,58 @@ def test_forward_attachments_keep_duplicate_names(tmp_path: Path) -> None:
     assert names == ["file (2).txt", "file.txt"]
     assert (tmp_path / "file.txt").read_text() == "part 1"
     assert (tmp_path / "file (2).txt").read_text() == "part 2"
+
+
+def test_read_insert_file_returns_contents(tmp_path: Path) -> None:
+    """Insert helper should read UTF-8 text files fully."""
+    source = tmp_path / "snippet.txt"
+    source.write_text("first line\nsecond line", encoding="utf-8")
+
+    assert ComposeWidget._read_insert_file(source) == "first line\nsecond line"
+
+
+def test_read_insert_file_rejects_non_utf8(tmp_path: Path) -> None:
+    """Insert helper should raise for non-UTF-8 content."""
+    source = tmp_path / "binary.bin"
+    source.write_bytes(b"\xff\xfe\x00\x00")
+
+    with pytest.raises(UnicodeDecodeError):
+        ComposeWidget._read_insert_file(source)
+
+
+def test_delete_previous_word_removes_word_and_whitespace() -> None:
+    """Backward delete should remove previous word and separator spacing."""
+    source = "hello   world"
+    text, index = ComposeTextArea._delete_previous_word(source, len(source))
+    assert text == "hello   "
+    assert index == 8
+
+
+def test_delete_previous_word_across_newline() -> None:
+    """Backward delete should work across line boundaries."""
+    source = "hello\nworld"
+    text, index = ComposeTextArea._delete_previous_word(source, len(source))
+    assert text == "hello\n"
+    assert index == 6
+
+
+def test_transpose_at_cursor_middle() -> None:
+    """Transpose should swap char before cursor with char at cursor."""
+    text, index = ComposeTextArea._transpose_at_cursor("abcd", 2)
+    assert text == "acbd"
+    assert index == 3
+
+
+def test_transpose_at_cursor_end_of_text() -> None:
+    """Transpose at end should swap final two characters."""
+    text, index = ComposeTextArea._transpose_at_cursor("abcd", 4)
+    assert text == "abdc"
+    assert index == 4
+
+
+def test_transpose_does_not_cross_newline() -> None:
+    """Transpose should no-op when it would involve a newline character."""
+    source = "ab\ncd"
+    text, index = ComposeTextArea._transpose_at_cursor(source, 2)
+    assert text == source
+    assert index == 2

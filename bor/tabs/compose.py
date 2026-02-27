@@ -435,6 +435,71 @@ class ComposeTextArea(CtrlLMixin, TextArea):
         """
         self._aliases = aliases
 
+    @staticmethod
+    def _cursor_to_index(text: str, row: int, col: int) -> int:
+        """Convert (row, col) cursor location to absolute index."""
+        lines = text.split("\n")
+        if not lines:
+            return 0
+
+        row = max(0, min(row, len(lines) - 1))
+        col = max(0, min(col, len(lines[row])))
+
+        index = 0
+        for line_index in range(row):
+            index += len(lines[line_index]) + 1
+        index += col
+        return index
+
+    @staticmethod
+    def _index_to_cursor(text: str, index: int) -> tuple[int, int]:
+        """Convert absolute index to (row, col) cursor location."""
+        if not text:
+            return (0, 0)
+
+        index = max(0, min(index, len(text)))
+        prefix = text[:index]
+        row = prefix.count("\n")
+        last_newline = prefix.rfind("\n")
+        col = index if last_newline == -1 else index - last_newline - 1
+        return (row, col)
+
+    @staticmethod
+    def _delete_previous_word(text: str, cursor_index: int) -> tuple[str, int]:
+        """Delete the previous word (and preceding whitespace) from cursor."""
+        if cursor_index <= 0:
+            return text, 0
+
+        start = cursor_index
+        while start > 0 and text[start - 1].isspace():
+            start -= 1
+        while start > 0 and not text[start - 1].isspace():
+            start -= 1
+
+        return text[:start] + text[cursor_index:], start
+
+    @staticmethod
+    def _transpose_at_cursor(text: str, cursor_index: int) -> tuple[str, int]:
+        """Transpose characters around cursor position."""
+        if len(text) < 2 or cursor_index <= 0:
+            return text, cursor_index
+
+        if cursor_index >= len(text):
+            left_index = len(text) - 2
+            right_index = len(text) - 1
+            new_cursor = len(text)
+        else:
+            left_index = cursor_index - 1
+            right_index = cursor_index
+            new_cursor = min(cursor_index + 1, len(text))
+
+        if text[left_index] == "\n" or text[right_index] == "\n":
+            return text, cursor_index
+
+        chars = list(text)
+        chars[left_index], chars[right_index] = chars[right_index], chars[left_index]
+        return "".join(chars), new_cursor
+
     def _on_key(self, event: events.Key) -> None:
         """Handle key events for text completion and commands."""
         # Handle clipboard operations - must prevent default to avoid SIGINT
@@ -465,6 +530,32 @@ class ComposeTextArea(CtrlLMixin, TextArea):
                     if start > end:
                         start, end = end, start
                     self.delete(start, end)
+            event.prevent_default()
+            event.stop()
+            return
+
+        if event.key in {"ctrl+backspace", "ctrl+w"}:
+            row, col = self.cursor_location
+            cursor_index = self._cursor_to_index(self.text, row, col)
+            new_text, new_index = self._delete_previous_word(self.text, cursor_index)
+
+            if new_text != self.text:
+                self.text = new_text
+                self.cursor_location = self._index_to_cursor(new_text, new_index)
+
+            event.prevent_default()
+            event.stop()
+            return
+
+        if event.key == "ctrl+t":
+            row, col = self.cursor_location
+            cursor_index = self._cursor_to_index(self.text, row, col)
+            new_text, new_index = self._transpose_at_cursor(self.text, cursor_index)
+
+            if new_text != self.text:
+                self.text = new_text
+                self.cursor_location = self._index_to_cursor(new_text, new_index)
+
             event.prevent_default()
             event.stop()
             return
@@ -744,6 +835,7 @@ class ComposeWidget(BaseTab):
         self._email_aliases: dict = {}
         self._text_aliases: dict = {}
         self._last_attachment_dir: Path = Path.home()  # Track last used directory
+        self._file_path_mode: Optional[str] = None
         self._draft_deleted: bool = False
 
     def compose(self) -> ComposeResult:
@@ -774,7 +866,7 @@ class ComposeWidget(BaseTab):
             with Vertical(classes="attachment-input-bar hidden", id="attachment-input-bar"):
                 yield Label("", id="attachment-completions", classes="attachment-completions")
                 with Horizontal():
-                    yield Label("Attach file: ", classes="attachment-input-label")
+                    yield Label("", id="file-path-input-label", classes="attachment-input-label")
                     yield FilePathInput(id="attachment-path-input", classes="attachment-path-input")
 
             with Horizontal(classes="status-bar"):
@@ -1167,6 +1259,12 @@ class ComposeWidget(BaseTab):
 
         return " ".join(chain)
 
+    @staticmethod
+    def _read_insert_file(path: Path) -> str:
+        """Read text content from a file for insertion into the editor."""
+        with path.open("r", encoding="utf-8") as handle:
+            return handle.read()
+
     def _build_message(self) -> MIMEMultipart:
         """
         Build the email message for sending.
@@ -1384,8 +1482,9 @@ class ComposeWidget(BaseTab):
         self.action_attach_file()
 
     def on_file_path_input_submitted(self, event: FilePathInput.Submitted) -> None:
-        """Handle file path submitted for attachment."""
-        path = Path(event.path)
+        """Handle file path submitted for attachment or insertion."""
+        path = Path(event.path).expanduser()
+        mode = self._file_path_mode or "attach"
         
         # Hide the input bar
         self.query_one("#attachment-input-bar", Vertical).add_class("hidden")
@@ -1400,25 +1499,44 @@ class ComposeWidget(BaseTab):
             self.notify(f"Not a file: {path}", severity="error")
             self.query_one("#body-input").focus()
             return
-        
-        # Add to attachments list
-        if path not in self.attachments:
-            self.attachments.append(path)
-            self._update_attachment_bar()
-            self.notify(f"Attached: {path.name}")
+
+        body_input = self.query_one("#body-input", ComposeTextArea)
+
+        if mode == "insert":
+            try:
+                content = self._read_insert_file(path)
+            except UnicodeDecodeError:
+                self.notify(f"File is not valid UTF-8 text: {path.name}", severity="error")
+                body_input.focus()
+                return
+            except OSError as error:
+                self.notify(f"Error reading file: {error}", severity="error")
+                body_input.focus()
+                return
+
+            body_input.focus()
+            body_input.insert(content)
+            self.notify(f"Inserted: {path.name}")
         else:
-            self.notify(f"Already attached: {path.name}", severity="warning")
+            if path not in self.attachments:
+                self.attachments.append(path)
+                self._update_attachment_bar()
+                self.notify(f"Attached: {path.name}")
+            else:
+                self.notify(f"Already attached: {path.name}", severity="warning")
         
         # Remember the directory for next time
         self._last_attachment_dir = path.parent
+        self._file_path_mode = None
         
         # Return focus to body
-        self.query_one("#body-input").focus()
+        body_input.focus()
 
     def on_file_path_input_cancelled(self, event: FilePathInput.Cancelled) -> None:
         """Handle file path input cancelled."""
         # Hide the input bar
         self.query_one("#attachment-input-bar", Vertical).add_class("hidden")
+        self._file_path_mode = None
         
         # Return focus to body
         self.query_one("#body-input").focus()
@@ -1453,14 +1571,19 @@ class ComposeWidget(BaseTab):
 
     def action_insert_file(self) -> None:
         """Insert file contents into body."""
-        # In a full implementation, this would open a file picker
-        # For now, just show a notification
-        self.notify("File insertion not yet implemented")
+        self._show_file_path_input(mode="insert", label="Insert file: ")
 
     def action_attach_file(self) -> None:
         """Attach a file."""
+        self._show_file_path_input(mode="attach", label="Attach file: ")
+
+    def _show_file_path_input(self, mode: str, label: str) -> None:
+        """Show the path input UI used for attach/insert actions."""
+        self._file_path_mode = mode
+
         # Show the attachment input bar
         self.query_one("#attachment-input-bar", Vertical).remove_class("hidden")
+        self.query_one("#file-path-input-label", Label).update(label)
         
         # Clear completions display initially
         self.query_one("#attachment-completions", Label).update("")

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0]
+
+### Added
+- Implemented compose `Ctrl+I` insert functionality: opens the same Tab-completing file-path prompt used for attachments, then inserts the selected file's UTF-8 text content at the current editor cursor position.
+- Added compose editor shortcuts: `Ctrl+T` now transposes characters around the cursor, and `Ctrl+Backspace` performs backward word deletion matching `Ctrl+W` behavior.
+
+### Fixed
+
+
 ## [0.4.0]
 
 ### Added
