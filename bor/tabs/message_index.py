@@ -7,6 +7,7 @@ Displays a list of email messages with navigation and actions.
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Callable, List, Optional, Set
 from rich.style import Style as RichStyle
 
@@ -23,29 +24,107 @@ from bor.mu import EmailMessage
 from bor.config import get_config
 
 
+_HISTORY_FILE = Path.home() / ".local" / "share" / "bor" / "search_history"
+_MAX_HISTORY = 200
+
+
 class SearchInput(Input):
-    """Input widget for search."""
+    """Input widget for search with Up/Down history navigation."""
 
     def __init__(self, *args, **kwargs) -> None:
         """Initialize search input."""
         super().__init__(*args, placeholder="Search...", **kwargs)
+        self._history: list[str] = []
+        self._history_pos: int = -1   # -1 = not browsing; ≥0 = index into _history
+        self._saved_value: str = ""   # typed value saved when history browsing starts
+        self._load_history()
+
+    # ------------------------------------------------------------------
+    # History persistence
+
+    def _load_history(self) -> None:
+        """Load search history from disk."""
+        try:
+            if _HISTORY_FILE.exists():
+                lines = _HISTORY_FILE.read_text(encoding="utf-8").splitlines()
+                self._history = [l for l in lines if l.strip()]
+        except Exception:
+            pass
+
+    def _save_to_history(self, query: str) -> None:
+        """Append a query to history (deduplicating) and persist to disk."""
+        query = query.strip()
+        if not query:
+            return
+        try:
+            self._history.remove(query)
+        except ValueError:
+            pass
+        self._history.append(query)
+        if len(self._history) > _MAX_HISTORY:
+            self._history = self._history[-_MAX_HISTORY:]
+        self._history_pos = -1
+        try:
+            _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _HISTORY_FILE.write_text("\n".join(self._history), encoding="utf-8")
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Public API
+
+    def reset_for_new_search(self) -> None:
+        """Clear the input and reset history browsing position."""
+        self.value = ""
+        self._history_pos = -1
+        self._saved_value = ""
+
+    # ------------------------------------------------------------------
+    # Key handling
 
     def on_key(self, event: events.Key) -> None:
         """Handle key events."""
         if event.key == "escape":
-            # Hide search bar
             search_bar = self.parent
             search_bar.remove_class("visible")
             self.display = False
-            # Focus the DataTable - need to go up to screen level to find it
+            self._history_pos = -1
             try:
                 self.screen.query_one(DataTable).focus()
             except Exception:
                 pass
             event.prevent_default()
             event.stop()
+
+        elif event.key == "up":
+            if self._history:
+                if self._history_pos == -1:
+                    # Begin browsing: save whatever the user had typed
+                    self._saved_value = self.value
+                    self._history_pos = len(self._history) - 1
+                elif self._history_pos > 0:
+                    self._history_pos -= 1
+                # at oldest entry (pos == 0) further Up is a no-op
+                self.value = self._history[self._history_pos]
+                self.cursor_position = len(self.value)
+            event.prevent_default()
+            event.stop()
+
+        elif event.key == "down":
+            if self._history_pos != -1:
+                if self._history_pos < len(self._history) - 1:
+                    self._history_pos += 1
+                    self.value = self._history[self._history_pos]
+                else:
+                    # Past the newest entry: restore the originally typed value
+                    self._history_pos = -1
+                    self.value = self._saved_value
+                self.cursor_position = len(self.value)
+            event.prevent_default()
+            event.stop()
+
         elif event.key == "enter":
-            # Trigger search
+            self._save_to_history(self.value)
             self.post_message(SearchInput.Submitted(self.value))
             event.prevent_default()
             event.stop()
@@ -692,7 +771,7 @@ class MessageIndexWidget(BaseTab):
         search_bar.add_class("visible")
         search_input = self.query_one("#search-input", SearchInput)
         search_input.display = True
-        search_input.value = ""
+        search_input.reset_for_new_search()
         search_input.focus()
 
     async def action_show_inbox(self) -> None:

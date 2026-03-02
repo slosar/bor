@@ -570,15 +570,21 @@ class MuInterface:
             msg.attachments = []
 
             if email_msg.is_multipart():
-                # Track MIME part index for mu extract --parts command
-                # mu only counts leaf parts (non-multipart), not container parts
+                # Track MIME part index for mu extract --parts command.
+                # mu numbers parts in depth-first walk order starting at 1, but
+                # skips structural multipart containers (mixed, alternative, related…).
+                # Exception: multipart/signed and multipart/encrypted ARE counted
+                # because mu lists them as extractable parts.
+                _COUNTED_MULTIPART = {"multipart/signed", "multipart/encrypted"}
                 part_index = 0
                 for part in email_msg.walk():
                     content_type = part.get_content_type()
-                    # Skip multipart containers - mu doesn't count them
-                    if content_type.startswith("multipart/"):
+                    if content_type.startswith("multipart/") and content_type not in _COUNTED_MULTIPART:
                         continue
                     part_index += 1
+                    if content_type.startswith("multipart/"):
+                        # Counted but not extractable as an attachment.
+                        continue
                     content_disposition = part.get("Content-Disposition", "")
                     filename = part.get_filename()
 

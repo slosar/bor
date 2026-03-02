@@ -14,6 +14,8 @@ import webbrowser
 from pathlib import Path
 from typing import Callable, Optional
 
+from rich.markup import escape as rich_escape
+
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -24,6 +26,23 @@ from textual.reactive import reactive
 from bor.tabs.base import BaseTab
 from bor.mu import EmailMessage, MuInterface
 from bor.config import get_config
+
+
+_URL_RE = re.compile(r'(https?://\S+)')
+
+
+def _make_body_markup(content: str) -> str:
+    """Escape Rich markup in plain-text body and wrap URLs in clickable link tags."""
+    parts = _URL_RE.split(content)
+    result = []
+    for i, part in enumerate(parts):
+        if i % 2 == 1:  # URL
+            url = part.rstrip('.,;:!?')
+            trailing = part[len(url):]
+            result.append(f'[link="{url}"]{rich_escape(url)}[/link]{rich_escape(trailing)}')
+        else:
+            result.append(rich_escape(part))
+    return "".join(result)
 
 
 def html_to_text(html: str) -> str:
@@ -358,7 +377,7 @@ class MessageViewWidget(BaseTab):
         with ScrollableContainer():
             yield MessageHeader(self._message_ref, id="msg-header")
             yield Static("", id="attachment-info", classes="attachment-info")
-            yield Static("Loading...", id="msg-body", markup=False)
+            yield Static("Loading...", id="msg-body")
         yield ConfirmBar("", id="confirm-bar")
         yield FlagBar("", id="flag-bar")
         yield ReplyBar("", id="reply-bar")
@@ -421,7 +440,7 @@ class MessageViewWidget(BaseTab):
 
             # Update body
             body = self.query_one("#msg-body", Static)
-            body.update(self._content)
+            body.update(_make_body_markup(self._content))
 
             # Update tab title
             title = self._full_message.subject[:20] + "..." if len(self._full_message.subject) > 20 else self._full_message.subject

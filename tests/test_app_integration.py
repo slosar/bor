@@ -33,6 +33,8 @@ class MockEmailMessage:
         self.body_html = kwargs.get("body_html", "")
         self.attachments = kwargs.get("attachments", [])
         self.thread_level = kwargs.get("thread_level", 0)
+        self.reply_to_addr = kwargs.get("reply_to_addr", None)
+        self.list_post_addr = kwargs.get("list_post_addr", None)
 
     @property
     def is_unread(self):
