@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.5.0]
 
 ### Added
+- Added `V` shortcut in message view to open the current message in the system browser as a full HTML preview (similar to mu4e's view-in-browser). Uses the HTML part if present, otherwise wraps plain text. A header block with From/To/Date/Subject is prepended. The message is written to a temporary file and opened via `webbrowser.open`. The temporary directory is configurable via `html.browser_tmp_dir` (defaults to the system temp dir).
 - Implemented compose `Ctrl+I` insert functionality: opens the same Tab-completing file-path prompt used for attachments, then inserts the selected file's UTF-8 text content at the current editor cursor position.
 - Added compose editor shortcuts: `Ctrl+T` now transposes characters around the cursor, and `Ctrl+Backspace` performs backward word deletion matching `Ctrl+W` behavior.
 

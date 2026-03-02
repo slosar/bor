@@ -166,6 +166,11 @@ renderer = "html2text"
 
 # Open links in browser when clicked
 open_links_in_browser = true
+
+# Directory for temporary HTML files created by "view in browser" (V key).
+# Defaults to the system temp directory when unset.
+# Useful when the system temp dir (/tmp) is restricted by browser security policies.
+# browser_tmp_dir = "~/tmp/bor"
 ```
 
 ### [attachments]
@@ -254,6 +259,11 @@ columns = ["date", "from", "subject", "flags"]
 flag_unread = "●"
 flag_replied = "↩"
 flag_attachment = "📎"
+
+[html]
+renderer = "html2text"
+open_links_in_browser = true
+# browser_tmp_dir = "~/tmp/bor"
 
 [aliases]
 r = "Best regards,\nJohn"

@@ -110,6 +110,7 @@ Complete reference of all keyboard shortcuts in Bor email reader.
 | A | Apply flag (U/N/F to add, Shift+U/N/F to remove) |
 | D | Delete message (with y/n confirmation) |
 | O | Open URL (if multiple, pick [1-9]) |
+| V | View message in browser (full HTML preview) |
 | Z | View attachments |
 | Ctrl+R | Toggle full headers |
 

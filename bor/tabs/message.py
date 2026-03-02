@@ -6,9 +6,12 @@ Displays a single email message with headers and body.
 
 from __future__ import annotations
 
+import html
 import re
 import subprocess
+import tempfile
 import webbrowser
+from pathlib import Path
 from typing import Callable, Optional
 
 from textual import events
@@ -298,6 +301,7 @@ class MessageViewWidget(BaseTab):
         Binding("c", "compose", "Compose"),
         Binding("z", "attachments", "Attachments"),
         Binding("o", "open_url", "Open URL"),
+        Binding("v", "view_in_browser", "View in Browser"),
         Binding("ctrl+r", "toggle_full_headers", "Full Headers"),
     ]
 
@@ -782,3 +786,68 @@ class MessageViewWidget(BaseTab):
             webbrowser.open(url)
         except Exception:
             pass
+
+    def action_view_in_browser(self) -> None:
+        """Open the current message as HTML in the system browser."""
+        if not self._full_message:
+            self.notify("No message loaded")
+            return
+
+        msg = self._full_message
+
+        if msg.body_html:
+            body_html = msg.body_html
+            # If the HTML doesn't have a full document structure, wrap it
+            if "<html" not in body_html.lower():
+                body_html = f"<html><body>{body_html}</body></html>"
+        else:
+            # Wrap plain text in a minimal HTML page
+            plain = msg.body_txt or "(No message content)"
+            escaped = html.escape(plain)
+            body_html = (
+                "<html><body>"
+                f"<pre style='font-family:monospace;white-space:pre-wrap'>{escaped}</pre>"
+                "</body></html>"
+            )
+
+        # Build header block to prepend
+        from_str = html.escape(str(msg.from_addr))
+        to_str = html.escape(", ".join(str(a) for a in msg.to_addrs))
+        date_str = html.escape(msg.date.strftime("%Y-%m-%d %H:%M:%S %Z") if msg.date else "")
+        subject_str = html.escape(msg.subject)
+
+        header_html = (
+            "<div style='font-family:sans-serif;border-bottom:1px solid #ccc;"
+            "padding:8px;margin-bottom:12px;background:#f5f5f5'>"
+            f"<b>From:</b> {from_str}<br>"
+            f"<b>To:</b> {to_str}<br>"
+            f"<b>Date:</b> {date_str}<br>"
+            f"<b>Subject:</b> {subject_str}"
+            "</div>"
+        )
+
+        # Inject header just after <body> (or prepend if not found)
+        lower = body_html.lower()
+        body_tag_end = lower.find("<body")
+        if body_tag_end != -1:
+            body_tag_end = body_html.find(">", body_tag_end) + 1
+            full_html = body_html[:body_tag_end] + header_html + body_html[body_tag_end:]
+        else:
+            full_html = header_html + body_html
+
+        try:
+            config = get_config()
+            tmp_dir_str = config.html.browser_tmp_dir
+            tmp_dir = Path(tmp_dir_str).expanduser() if tmp_dir_str else None
+            if tmp_dir is not None:
+                tmp_dir.mkdir(parents=True, exist_ok=True)
+            tmp = tempfile.NamedTemporaryFile(
+                suffix=".html", prefix="bor_msg_", delete=False,
+                mode="w", encoding="utf-8", dir=tmp_dir,
+            )
+            tmp.write(full_html)
+            tmp.close()
+            webbrowser.open(Path(tmp.name).as_uri())
+            self.notify("Message opened in browser")
+        except Exception as e:
+            self.notify(f"Could not open browser: {e}")
