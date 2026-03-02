@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added compose editor shortcuts: `Ctrl+T` now transposes characters around the cursor, and `Ctrl+Backspace` performs backward word deletion matching `Ctrl+W` behavior.
 
 ### Fixed
-
+- Reply now correctly handles mailing list emails. For messages with a `List-Post` header (e.g. Google Groups), replies go to the list address. For other messages with a `Reply-To` header, that address is used. The effective reply destination is shown in the message header as `List:` (for list mail) or `Reply-To:` (for non-list mail with a different reply address).
 
 ## [0.4.0]
 

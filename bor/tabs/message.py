@@ -119,6 +119,15 @@ class MessageHeader(Static):
         # From
         lines.append(f"[bold]From:[/bold]    {self.message.from_addr}")
 
+        # Show effective reply address when it differs from From
+        if self.message.list_post_addr and self.message.list_post_addr.email:
+            # Mailing list: show the list address (this is where 'r' will send)
+            if self.message.list_post_addr.email != self.message.from_addr.email:
+                lines.append(f"[bold]List:[/bold]    {self.message.list_post_addr.email}")
+        elif (self.message.reply_to_addr and
+                self.message.reply_to_addr.email != self.message.from_addr.email):
+            lines.append(f"[bold]Reply-To:[/bold] {self.message.reply_to_addr}")
+
         # To
         to_list = ", ".join(str(addr) for addr in self.message.to_addrs)
         lines.append(f"[bold]To:[/bold]      {to_list}")

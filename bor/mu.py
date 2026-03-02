@@ -94,6 +94,7 @@ class EmailMessage:
     size: int = 0
     from_addr: EmailAddress = field(default_factory=EmailAddress)
     reply_to_addr: Optional[EmailAddress] = None  # Reply-To header if present
+    list_post_addr: Optional[EmailAddress] = None  # List-Post header (mailing list address)
     to_addrs: List[EmailAddress] = field(default_factory=list)
     cc_addrs: List[EmailAddress] = field(default_factory=list)
     bcc_addrs: List[EmailAddress] = field(default_factory=list)
@@ -227,10 +228,25 @@ class EmailMessage:
             msg.references = [str(r) for r in refs]
         msg.in_reply_to = get("in-reply-to", "")
 
-        # Parse Reply-To header
-        reply_to_data = get("reply-to", [])
-        if isinstance(reply_to_data, list) and reply_to_data:
-            msg.reply_to_addr = EmailAddress.from_mu(reply_to_data[0])
+        # Parse Reply-To header (mu may return list, dict, or string)
+        reply_to_data = get("reply-to", None)
+        if reply_to_data:
+            if isinstance(reply_to_data, list) and reply_to_data:
+                msg.reply_to_addr = EmailAddress.from_mu(reply_to_data[0])
+            elif not isinstance(reply_to_data, list):
+                msg.reply_to_addr = EmailAddress.from_mu(reply_to_data)
+
+        # Parse List-Post header (mailing list address, takes priority over Reply-To for replies)
+        list_post_data = get("list-post", None)
+        if list_post_data:
+            if isinstance(list_post_data, list) and list_post_data:
+                addr = EmailAddress.from_mu(list_post_data[0])
+                if addr.email:
+                    msg.list_post_addr = addr
+            elif not isinstance(list_post_data, list):
+                addr = EmailAddress.from_mu(list_post_data)
+                if addr.email:
+                    msg.list_post_addr = addr
 
         # Priority
         msg.priority = get("priority", "normal")
@@ -524,10 +540,20 @@ class MuInterface:
                 msg.bcc_addrs = [EmailAddress(name=name, email=email) 
                                 for name, email in parsed_addrs if email]
 
-            # Parse Reply-To
+            # Parse Reply-To (use getaddresses for consistent multi-address handling)
             reply_to_header = email_msg.get("Reply-To", "")
             if reply_to_header:
-                msg.reply_to_addr = EmailAddress.from_mu(reply_to_header)
+                parsed_reply_to = email_utils.getaddresses([reply_to_header])
+                if parsed_reply_to and parsed_reply_to[0][1]:
+                    name, email = parsed_reply_to[0]
+                    msg.reply_to_addr = EmailAddress(name=name, email=email)
+
+            # Parse List-Post header — extract the mailto: address for mailing list replies
+            list_post_header = email_msg.get("List-Post", "")
+            if list_post_header:
+                mailto_match = re.search(r"<mailto:([^>]+)>", list_post_header, re.IGNORECASE)
+                if mailto_match:
+                    msg.list_post_addr = EmailAddress(email=mailto_match.group(1))
 
             # Parse date
             date_header = email_msg.get("Date")

@@ -936,7 +936,10 @@ class ComposeWidget(BaseTab):
         to_input = self.query_one("#to-input", AddressInput)
         to_addrs = []
         
-        if msg.reply_to_addr:
+        if msg.list_post_addr and msg.list_post_addr.email:
+            # Mailing list: reply to the list address (List-Post header)
+            to_addrs.append(str(msg.list_post_addr))
+        elif msg.reply_to_addr and msg.reply_to_addr.email:
             to_addrs.append(str(msg.reply_to_addr))
         else:
             to_addrs.append(str(msg.from_addr))

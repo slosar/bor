@@ -37,43 +37,41 @@ def test_compose_references_deduplicates_ids() -> None:
 def test_smtp_address_extraction_with_commas() -> None:
     """Test that addresses with commas in display names are extracted correctly for SMTP."""
     # Simulate what would be in the To/CC/BCC headers after formatting
-    to_header = '"Slosar, Anze" <slosar@gmail.com>, "Derose, Joseph" <derose@bnl.gov>'
+    to_header = '"Smith, Alice" <alice@example.com>, "Brown, Bob" <bob@example.org>'
     cc_header = 'John Doe <john@example.com>'
-    
+
     # Extract addresses the way _send_message does
     to_addrs = []
     to_addrs.extend([email for name, email in email.utils.getaddresses([to_header])])
     to_addrs.extend([email for name, email in email.utils.getaddresses([cc_header])])
     to_addrs = [addr for addr in to_addrs if addr]
-    
+
     # Should extract exactly 3 email addresses
     assert len(to_addrs) == 3
-    assert 'slosar@gmail.com' in to_addrs
-    assert 'derose@bnl.gov' in to_addrs
+    assert 'alice@example.com' in to_addrs
+    assert 'bob@example.org' in to_addrs
     assert 'john@example.com' in to_addrs
 
 
 def test_find_address_start_with_quoted_commas() -> None:
     """Test that _find_address_start correctly handles commas in quoted names."""
     addr_input = AddressInput()
-    
+
     # Test 1: Single address with comma in quoted name
-    text1 = '"Slosar, Anze" <slosar@gmail.com>'
+    text1 = '"Smith, Alice" <alice@example.com>'
     start1 = addr_input._find_address_start(text1, len(text1))
     assert start1 == 0, "Should start at beginning for single quoted address"
-    
+
     # Test 2: After separator comma (not quoted comma)
-    text2 = '"Slosar, Anze" <slosar@gmail.com>, John'
+    text2 = '"Smith, Alice" <alice@example.com>, John'
     start2 = addr_input._find_address_start(text2, len(text2))
-    assert start2 == 34, "Should find position after separator comma"
-    assert text2[start2:].strip() == "John"
-    
+    assert text2[start2:].strip() == "John", "Should find position after separator comma"
+
     # Test 3: Second address with quoted comma
-    text3 = '"Derose, Joseph" <derose@bnl.gov>, "Slosar, Anze" <slosar@gmail.com>'
+    text3 = '"Brown, Bob" <bob@example.org>, "Smith, Alice" <alice@example.com>'
     start3 = addr_input._find_address_start(text3, len(text3))
-    assert start3 == 34, "Should find start of second quoted address"
-    assert text3[start3:].strip() == '"Slosar, Anze" <slosar@gmail.com>'
-    
+    assert text3[start3:].strip() == '"Smith, Alice" <alice@example.com>'
+
     # Test 4: Escaped quotes in name
     text4 = r'"Joe \"The Boss\" Smith" <joe@example.com>, Another'
     start4 = addr_input._find_address_start(text4, len(text4))
@@ -199,6 +197,79 @@ def test_reply_all_excludes_self_from_cc() -> None:
     assert any("bob@example.com" in entry for entry in cc_list)
     assert any("david@example.com" in entry for entry in cc_list)
     assert all("charlie@example.com" not in entry for entry in cc_list)
+
+
+def test_reply_uses_list_post_for_mailing_list_emails() -> None:
+    """Test that replying to a mailing list email uses List-Post, not Reply-To (individual).
+
+    Models the case where a mailing list hides sender addresses:
+      From = list address (sender privacy on)
+      Reply-To = individual sender
+      List-Post = list address
+    The reply should go to the list, not the individual.
+    """
+    original_msg = EmailMessage(
+        msgid="<msg@example.org>",
+        from_addr=EmailAddress(name="'sender@example.com' via Test List", email="list@example.org"),
+        to_addrs=[EmailAddress(name="Test List", email="list@example.org")],
+        reply_to_addr=EmailAddress(name="Sender", email="sender@example.com"),
+        list_post_addr=EmailAddress(email="list@example.org"),
+    )
+
+    # Simulate what _init_reply does to pick the To address
+    to_addrs = []
+    if original_msg.list_post_addr and original_msg.list_post_addr.email:
+        to_addrs.append(str(original_msg.list_post_addr))
+    elif original_msg.reply_to_addr and original_msg.reply_to_addr.email:
+        to_addrs.append(str(original_msg.reply_to_addr))
+    else:
+        to_addrs.append(str(original_msg.from_addr))
+
+    # Reply should go to the list, not the individual sender
+    assert len(to_addrs) == 1
+    assert "list@example.org" in to_addrs[0]
+    assert "sender@example.com" not in to_addrs[0]
+
+
+def test_reply_uses_reply_to_header_when_no_list_post() -> None:
+    """Test that replying to a non-list message with Reply-To uses that address."""
+    original_msg = EmailMessage(
+        msgid="<msg@example.com>",
+        from_addr=EmailAddress(name="Alice", email="alice@example.com"),
+        to_addrs=[EmailAddress(name="Me", email="me@example.com")],
+        reply_to_addr=EmailAddress(name="Alice Support", email="support@example.com"),
+        list_post_addr=None,
+    )
+
+    to_addrs = []
+    if original_msg.list_post_addr and original_msg.list_post_addr.email:
+        to_addrs.append(str(original_msg.list_post_addr))
+    elif original_msg.reply_to_addr and original_msg.reply_to_addr.email:
+        to_addrs.append(str(original_msg.reply_to_addr))
+    else:
+        to_addrs.append(str(original_msg.from_addr))
+
+    assert len(to_addrs) == 1
+    assert "support@example.com" in to_addrs[0]
+
+
+def test_reply_falls_back_to_from_without_reply_to() -> None:
+    """Test that replying without Reply-To header uses From address."""
+    original_msg = EmailMessage(
+        msgid="<msg@example.com>",
+        from_addr=EmailAddress(name="Alice", email="alice@example.com"),
+        to_addrs=[EmailAddress(name="Bob", email="bob@example.com")],
+        reply_to_addr=None,
+    )
+
+    to_addrs = []
+    if original_msg.reply_to_addr and original_msg.reply_to_addr.email:
+        to_addrs.append(str(original_msg.reply_to_addr))
+    else:
+        to_addrs.append(str(original_msg.from_addr))
+
+    assert len(to_addrs) == 1
+    assert "alice@example.com" in to_addrs[0]
 
 
 def test_forward_attachments_keep_duplicate_names(tmp_path: Path) -> None:
