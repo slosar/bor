@@ -175,12 +175,47 @@ class MessageHeader(Static):
             count = len(self.message.attachments)
             lines.append(f"[bold]Attach:[/bold]  {count} attachment(s)")
 
-        # Full headers
+        # Full / rich headers
         if self.show_full:
+            lines.append("")  # visual separator
+
             if self.message.msgid:
-                lines.append(f"[bold]Msg-ID:[/bold]  {self.message.msgid}")
+                lines.append(f"[bold]Message-ID:[/bold] {rich_escape(self.message.msgid)}")
             if self.message.in_reply_to:
-                lines.append(f"[bold]Reply-To:[/bold] {self.message.in_reply_to}")
+                lines.append(f"[bold]In-Reply-To:[/bold] {rich_escape(self.message.in_reply_to)}")
+            if self.message.references:
+                n = len(self.message.references)
+                sample = " ".join(self.message.references[-2:])
+                suffix = f" (… {n} total)" if n > 2 else ""
+                lines.append(f"[bold]References:[/bold] {rich_escape(sample)}{suffix}")
+
+            if self.message.priority and self.message.priority != "normal":
+                lines.append(f"[bold]Priority:[/bold]   {rich_escape(self.message.priority)}")
+
+            if self.message.size:
+                size = self.message.size
+                if size >= 1024 * 1024:
+                    size_str = f"{size / (1024 * 1024):.1f} MB"
+                elif size >= 1024:
+                    size_str = f"{size / 1024:.1f} KB"
+                else:
+                    size_str = f"{size} B"
+                lines.append(f"[bold]Size:[/bold]       {size_str}")
+
+            if self.message.maildir:
+                lines.append(f"[bold]Folder:[/bold]     {rich_escape(self.message.maildir)}")
+
+            if self.message.flags:
+                lines.append(f"[bold]Flags:[/bold]      {rich_escape(', '.join(self.message.flags))}")
+
+            if self.message.tags:
+                lines.append(f"[bold]Tags:[/bold]       {rich_escape(', '.join(self.message.tags))}")
+
+            # Extra headers captured from the raw file
+            for hdr_name, val in self.message.extra_headers.items():
+                # Truncate very long values (e.g. Authentication-Results)
+                display_val = val if len(val) <= 100 else val[:97] + "…"
+                lines.append(f"[bold]{rich_escape(hdr_name)}:[/bold] {rich_escape(display_val)}")
 
         return "\n".join(lines)
 
@@ -748,7 +783,7 @@ class MessageViewWidget(BaseTab):
         if self._full_message:
             header = self.query_one("#msg-header", MessageHeader)
             header.show_full = self.show_full_headers
-            header.refresh()
+            header.update_message(self._full_message)
 
     def on_click(self, event: events.Click) -> None:
         """Handle clicks on links."""

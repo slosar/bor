@@ -107,6 +107,7 @@ class EmailMessage:
     body_html: str = ""
     attachments: List[Dict[str, Any]] = field(default_factory=list)
     thread_level: int = 0  # For threading display
+    extra_headers: Dict[str, str] = field(default_factory=dict)  # Additional headers for full view
 
     @property
     def is_unread(self) -> bool:
@@ -555,6 +556,15 @@ class MuInterface:
                 if mailto_match:
                     msg.list_post_addr = EmailAddress(email=mailto_match.group(1))
 
+            # Parse In-Reply-To and References
+            in_reply_to_header = email_msg.get("In-Reply-To", "")
+            if in_reply_to_header:
+                msg.in_reply_to = str(in_reply_to_header).strip()
+
+            references_header = email_msg.get("References", "")
+            if references_header:
+                msg.references = references_header.split()
+
             # Parse date
             date_header = email_msg.get("Date")
             if date_header:
@@ -652,6 +662,26 @@ class MuInterface:
                         msg.body_html = text
                     else:
                         msg.body_txt = text
+
+            # Capture extra headers for full-header display
+            _EXTRA_HEADER_NAMES = [
+                "Return-Path",
+                "Sender",
+                "X-Mailer",
+                "User-Agent",
+                "X-Spam-Status",
+                "X-Spam-Score",
+                "Authentication-Results",
+                "X-Originating-IP",
+            ]
+            for hdr_name in _EXTRA_HEADER_NAMES:
+                val = email_msg.get(hdr_name, "")
+                if val:
+                    msg.extra_headers[hdr_name] = str(val).strip()
+            # Include the first Received header (shows originating server/IP)
+            received = email_msg.get_all("Received") or []
+            if received:
+                msg.extra_headers["Received"] = str(received[-1]).strip()
 
             # Mark as read if requested and update path if it changed
             if mark_as_read and self._is_new_or_unread(path):
