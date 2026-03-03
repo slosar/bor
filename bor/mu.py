@@ -422,29 +422,38 @@ class MuInterface:
     def _compute_thread_levels(self, messages: List[EmailMessage]) -> None:
         """
         Compute thread_level for each message based on references.
-        
-        Only shows threading when the parent message is visible in the list.
-        Messages whose parents aren't visible are treated as root (level 0).
+
+        Uses parent_level + 1 so that threads with incomplete reference chains
+        (e.g. Outlook only puts the immediate parent in References, not the full
+        ancestry) still nest correctly.  Messages whose parent is not visible are
+        treated as roots (level 0).
         """
-        # Build a set of message-ids in our result set
-        visible_msgids = set()
-        for msg in messages:
+        # Build msgid → position mapping (earlier index = earlier in thread order)
+        msgid_to_idx: Dict[str, int] = {}
+        for idx, msg in enumerate(messages):
             if msg.msgid:
-                visible_msgids.add(msg.msgid)
-        
-        for msg in messages:
+                msgid_to_idx[msg.msgid] = idx
+
+        levels: List[int] = [0] * len(messages)
+
+        for idx, msg in enumerate(messages):
             if not msg.references:
-                msg.thread_level = 0
-            else:
-                # Count how many ancestors are visible in our list
-                # Walk the reference chain and count visible ones
-                visible_ancestors = 0
-                for ref in msg.references:
-                    if ref in visible_msgids:
-                        visible_ancestors += 1
-                
-                # Thread level is based on visible ancestors only
-                msg.thread_level = min(visible_ancestors, 10)  # Cap at 10
+                levels[idx] = 0
+                continue
+
+            # Walk references newest-first to find the closest visible ancestor
+            # (RFC 2822: last reference is the immediate parent)
+            parent_level = -1
+            for ref in reversed(msg.references):
+                parent_idx = msgid_to_idx.get(ref)
+                if parent_idx is not None and parent_idx < idx:
+                    parent_level = levels[parent_idx]
+                    break
+
+            levels[idx] = 0 if parent_level == -1 else parent_level + 1
+
+        for idx, msg in enumerate(messages):
+            msg.thread_level = min(levels[idx], 10)
 
     def find_by_msgid(self, msgid: str) -> Optional[EmailMessage]:
         """
@@ -472,14 +481,71 @@ class MuInterface:
         Returns:
             List of all messages in the thread
         """
+        # Collect all message-IDs we know about for this thread: the message
+        # itself plus its full reference chain.
+        known_ids: set[str] = set()
         if message.msgid:
-            query = f"msgid:{message.msgid} OR refs:{message.msgid}"
-        else:
+            known_ids.add(message.msgid)
+        for ref in message.references or []:
+            if ref:
+                known_ids.add(ref)
+
+        if not known_ids:
             # Fallback to subject-based threading
             subject = re.sub(r"^(re|fwd|fw):\s*", "", message.subject, flags=re.I)
-            query = f'subject:"{subject}"'
+            return self.find(f'subject:"{subject}"', threads=True, include_related=True)
 
-        return self.find(query, threads=True, include_related=True)
+        def _msgid_query(ids: set[str]) -> str:
+            return " OR ".join(f"msgid:{mid}" for mid in ids if mid)
+
+        # Pass 1: search by msgid for all known IDs with --include-related.
+        # include-related uses mu's internal ThreadId field to expand to the
+        # full "sub-thread" for each found message.
+        pass1 = self.find(_msgid_query(known_ids), threads=True, include_related=True)
+
+        # Expand with all msgids found in pass 1 (and their references).
+        expanded_ids: set[str] = set(known_ids)
+        for msg in pass1:
+            if msg.msgid:
+                expanded_ids.add(msg.msgid)
+            for ref in msg.references or []:
+                if ref:
+                    expanded_ids.add(ref)
+
+        if expanded_ids == known_ids:
+            return pass1
+
+        # Iteratively search using both msgid: and thread: until no new
+        # messages are found.  mu's ThreadId = first_ref if refs else msgid,
+        # so  thread:X  finds messages whose first reference is X — exactly
+        # the descendants whose short reference chains (one hop only) would
+        # otherwise be missed by a pure msgid-based search.
+        MAX_PASSES = 5
+        current_results = pass1
+        current_ids = expanded_ids
+
+        for _ in range(MAX_PASSES):
+            thread_parts = " OR ".join(f"thread:{mid}" for mid in current_ids if mid)
+            msgid_parts = _msgid_query(current_ids)
+            combined = f"({msgid_parts}) OR ({thread_parts})"
+            new_results = self.find(combined, threads=True, include_related=True)
+
+            # Expand our known ID set with newly found messages
+            new_ids: set[str] = set(current_ids)
+            for msg in new_results:
+                if msg.msgid:
+                    new_ids.add(msg.msgid)
+                for ref in msg.references or []:
+                    if ref:
+                        new_ids.add(ref)
+
+            if new_ids == current_ids:
+                return new_results  # Stable — no more to find
+
+            current_results = new_results
+            current_ids = new_ids
+
+        return current_results
 
     def view(self, path: str, mark_as_read: bool = True, msgid: str = "") -> Optional[EmailMessage]:
         """
