@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import html
 import re
-import subprocess
 import tempfile
 import webbrowser
 from pathlib import Path
