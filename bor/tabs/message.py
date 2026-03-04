@@ -37,9 +37,12 @@ def _make_body_markup(content: str) -> str:
     result = []
     for i, part in enumerate(parts):
         if i % 2 == 1:  # URL
-            url = part.rstrip('.,;:!?')
+            # Strip common trailing punctuation plus chars that close Markdown/HTML constructs
+            url = part.rstrip('.,;:!?)]>')
             trailing = part[len(url):]
-            result.append(f'[link="{url}"]{rich_escape(url)}[/link]{rich_escape(trailing)}')
+            # Escape chars that would break Rich's [link="url"] attribute syntax
+            safe_url = url.replace('"', '%22').replace(']', '%5D')
+            result.append(f'[link="{safe_url}"]{rich_escape(url)}[/link]{rich_escape(trailing)}')
         else:
             result.append(rich_escape(part))
     return "".join(result)
@@ -475,7 +478,10 @@ class MessageViewWidget(BaseTab):
 
             # Update body
             body = self.query_one("#msg-body", Static)
-            body.update(_make_body_markup(self._content))
+            try:
+                body.update(_make_body_markup(self._content))
+            except Exception:
+                body.update(rich_escape(self._content))
 
             # Update tab title
             title = self._full_message.subject[:20] + "..." if len(self._full_message.subject) > 20 else self._full_message.subject
