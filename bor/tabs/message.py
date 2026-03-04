@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import html
 import re
-import subprocess
 import tempfile
 import webbrowser
 from pathlib import Path
@@ -171,7 +170,7 @@ class MessageHeader(Static):
         lines.append(f"[bold]Date:[/bold]    {rich_escape(date_str)}")
 
         # Subject
-        lines.append(f"[bold]Subject:[/bold] {rich_escape(str(self.message.subject))}")
+        lines.append(f"[bold]Subject:[/bold] {rich_escape(self.message.subject)}")
 
         # Attachments count
         if self.message.attachments:
