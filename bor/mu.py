@@ -579,7 +579,7 @@ class MuInterface:
             msg = EmailMessage()
             msg.path = path
             msg.subject = email_msg.get("Subject", "(no subject)")
-            msg.msgid = email_msg.get("Message-ID", "")
+            msg.msgid = email_msg.get("Message-ID", "").strip().strip("<>")
 
             # Parse From
             from_header = email_msg.get("From", "")

@@ -558,17 +558,17 @@ class MessageViewWidget(BaseTab):
         Navigation follows the index order (threaded or date-sorted).
         """
         # Find current message's position in the index by msgid
-        current_msgid = self._message_ref.msgid
+        current_msgid = self._message_ref.msgid.strip().strip("<>")
         current_idx = None
         for idx, msg in enumerate(self.bor_app._current_messages):
-            if msg.msgid == current_msgid:
+            if msg.msgid.strip().strip("<>") == current_msgid:
                 current_idx = idx
                 break
-        
+
         # If current message is not in index, do nothing
         if current_idx is None:
             return
-        
+
         # Check if there's a next message
         if current_idx + 1 < len(self.bor_app._current_messages):
             self.bor_app._current_index = current_idx + 1
@@ -583,17 +583,17 @@ class MessageViewWidget(BaseTab):
         Navigation follows the index order (threaded or date-sorted).
         """
         # Find current message's position in the index by msgid
-        current_msgid = self._message_ref.msgid
+        current_msgid = self._message_ref.msgid.strip().strip("<>")
         current_idx = None
         for idx, msg in enumerate(self.bor_app._current_messages):
-            if msg.msgid == current_msgid:
+            if msg.msgid.strip().strip("<>") == current_msgid:
                 current_idx = idx
                 break
-        
+
         # If current message is not in index, do nothing
         if current_idx is None:
             return
-        
+
         # Check if there's a previous message
         if current_idx > 0:
             self.bor_app._current_index = current_idx - 1
