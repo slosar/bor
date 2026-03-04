@@ -139,39 +139,39 @@ class MessageHeader(Static):
         lines = []
 
         # From
-        lines.append(f"[bold]From:[/bold]    {self.message.from_addr}")
+        lines.append(f"[bold]From:[/bold]    {rich_escape(str(self.message.from_addr))}")
 
         # Show effective reply address when it differs from From
         if self.message.list_post_addr and self.message.list_post_addr.email:
             # Mailing list: show the list address (this is where 'r' will send)
             if self.message.list_post_addr.email != self.message.from_addr.email:
-                lines.append(f"[bold]List:[/bold]    {self.message.list_post_addr.email}")
+                lines.append(f"[bold]List:[/bold]    {rich_escape(self.message.list_post_addr.email)}")
         elif (self.message.reply_to_addr and
                 self.message.reply_to_addr.email != self.message.from_addr.email):
-            lines.append(f"[bold]Reply-To:[/bold] {self.message.reply_to_addr}")
+            lines.append(f"[bold]Reply-To:[/bold] {rich_escape(str(self.message.reply_to_addr))}")
 
         # To
-        to_list = ", ".join(str(addr) for addr in self.message.to_addrs)
+        to_list = rich_escape(", ".join(str(addr) for addr in self.message.to_addrs))
         lines.append(f"[bold]To:[/bold]      {to_list}")
 
         # CC
         if self.message.cc_addrs:
-            cc_list = ", ".join(str(addr) for addr in self.message.cc_addrs)
+            cc_list = rich_escape(", ".join(str(addr) for addr in self.message.cc_addrs))
             lines.append(f"[bold]CC:[/bold]      {cc_list}")
 
         # BCC (only in full header mode)
         if self.show_full and self.message.bcc_addrs:
-            bcc_list = ", ".join(str(addr) for addr in self.message.bcc_addrs)
+            bcc_list = rich_escape(", ".join(str(addr) for addr in self.message.bcc_addrs))
             lines.append(f"[bold]BCC:[/bold]     {bcc_list}")
 
         # Date
         date_str = ""
         if self.message.date:
             date_str = self.message.date.strftime("%Y-%m-%d %H:%M:%S %Z")
-        lines.append(f"[bold]Date:[/bold]    {date_str}")
+        lines.append(f"[bold]Date:[/bold]    {rich_escape(date_str)}")
 
         # Subject
-        lines.append(f"[bold]Subject:[/bold] {self.message.subject}")
+        lines.append(f"[bold]Subject:[/bold] {rich_escape(str(self.message.subject))}")
 
         # Attachments count
         if self.message.attachments:
