@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0]
+
+### Added
+- Search history: pressing `Up`/`Down` in the search box (`S`) scrolls through previous queries (newest first). The recalled query is editable before pressing Enter. History is persisted across sessions to `~/.local/share/bor/search_history` (up to 200 entries, deduplicated).
+- `Ctrl+R` in message view now toggles a rich extended-header block showing: Message-ID, In-Reply-To, References count, Priority, Size, Folder, Flags, Tags, and extra transport headers (Return-Path, Sender, X-Mailer/User-Agent, X-Spam-Status/Score, Authentication-Results, X-Originating-IP, first Received hop). Previously `Ctrl+R` was wired up but had no visible effect.
+- Added `V` shortcut in message view to open the current message in the system browser as a full HTML preview (similar to mu4e's view-in-browser). Uses the HTML part if present, otherwise wraps plain text. A header block with From/To/Date/Subject is prepended. The message is written to a temporary file and opened via `webbrowser.open`. The temporary directory is configurable via `html.browser_tmp_dir` (defaults to the system temp dir).
+- Implemented compose `Ctrl+I` insert functionality: opens the same Tab-completing file-path prompt used for attachments, then inserts the selected file's UTF-8 text content at the current editor cursor position.
+- Added compose editor shortcuts: `Ctrl+T` now transposes characters around the cursor, and `Ctrl+Backspace` performs backward word deletion matching `Ctrl+W` behavior.
+
+### Fixed
+- Fixed `MarkupError` crash when opening HTML emails whose converted plain text contains URLs with special characters (`"`, `]`, or trailing `)` from Markdown-style links). The URL is now sanitised before embedding it in a Rich `[link="…"]` markup tag, and a fallback renders the body without link markup if any error still occurs.
+- Kitty inline image previews in the attachments tab now display at the image's natural pixel size instead of being stretched to fill the available terminal width. If the image is larger than the available preview area, it is scaled down to fit while preserving the aspect ratio. Cell pixel dimensions are queried via `TIOCGWINSZ`; a rough 2 px/cell fallback is used when the query fails.
+- Fixed N/P (next/previous message) navigation breaking after opening attachments (Z) and returning (Q). The new `MessageViewWidget` received the fully-parsed message from `mu.view()` as its reference, whose `Message-ID` header retains angle brackets (`<foo@bar.com>`), while messages in the search index from `mu.find()` store msgids without them. The lookup always missed, so N/P silently did nothing. Fixed by stripping angle brackets in `mu.view()` when storing `msgid`, and normalising both sides of the comparison in the navigation actions.
+- Fixed thread nesting depth computation (`_compute_thread_levels`). Previously, depth was calculated by counting the number of visible ancestors in the References list, which gave the wrong level whenever an email client (e.g. Outlook) only put the immediate parent in References rather than the full ancestor chain. Now each message's level is set to `parent_level + 1`, correctly nesting replies regardless of how short the References chain is.
+- Fixed `Ctrl+T` (Show Thread) to find the complete thread even when reference chains are incomplete. The new search strategy uses `thread:` (mu's internal ThreadId field, equal to the oldest known reference) in addition to `msgid:`, and iterates until no new messages are found. This is particularly effective when multiple one-hop reference chains fragment the conversation into separate mu sub-threads.
+- Fixed attachment extraction for messages signed with S/MIME (`multipart/signed`). The MIME part numbering now correctly counts `multipart/signed` (and `multipart/encrypted`) as extractable parts while still skipping structural multipart containers, matching mu's own numbering. Previously, PDFs in signed messages would extract the wrong part (a text/html body), saved with a generic name like `part-3` and opened in the browser instead of a PDF viewer.
+- URLs in the message body are now clickable: clicking one opens it in the system browser. The `o` key still works for keyboard-driven URL selection.
+- Reply now correctly handles mailing list emails. For messages with a `List-Post` header (e.g. Google Groups), replies go to the list address. For other messages with a `Reply-To` header, that address is used. The effective reply destination is shown in the message header as `List:` (for list mail) or `Reply-To:` (for non-list mail with a different reply address).
+
 ## [0.4.0]
 
 ### Added

@@ -60,6 +60,53 @@ class AttachmentItem(ListItem):
         yield Static(f"[{self.index}] {filename} ({content_type}, {size_str}){inline_marker}")
 
 
+def _kitty_image_size_params(img_w: int, img_h: int, avail_cols: int, avail_rows: int) -> str:
+    """Return Kitty graphics size params string.
+
+    Shows the image at its natural pixel size if it fits within the available
+    terminal cells; otherwise scales it down to fit, preserving aspect ratio.
+    Returns an empty string (no constraint) when the image fits naturally.
+    """
+    if img_w <= 0 or img_h <= 0:
+        return f",c={avail_cols}"
+
+    # Query terminal cell dimensions in pixels via TIOCGWINSZ.
+    cell_px_w = cell_px_h = 0.0
+    try:
+        import fcntl
+        import struct
+        import termios
+        with open("/dev/tty") as _tty:
+            buf = struct.pack("HHHH", 0, 0, 0, 0)
+            res = struct.unpack("HHHH", fcntl.ioctl(_tty.fileno(), termios.TIOCGWINSZ, buf))
+        t_rows, t_cols, t_px_w, t_px_h = res
+        if t_cols > 0 and t_rows > 0 and t_px_w > 0 and t_px_h > 0:
+            cell_px_w = t_px_w / t_cols
+            cell_px_h = t_px_h / t_rows
+    except Exception:
+        pass
+
+    if cell_px_w > 0 and cell_px_h > 0:
+        # Image's natural footprint in terminal cells
+        natural_cols = img_w / cell_px_w
+        natural_rows = img_h / cell_px_h
+        if natural_cols <= avail_cols and natural_rows <= avail_rows:
+            # Fits at 1:1 pixel size — let Kitty auto-size
+            return ""
+        # Scale down to fit, preserving aspect ratio
+        scale = min(avail_cols / natural_cols, avail_rows / natural_rows)
+        fit_cols = max(1, int(natural_cols * scale))
+        fit_rows = max(1, int(natural_rows * scale))
+        return f",c={fit_cols},r={fit_rows}"
+
+    # Fallback when pixel density is unknown: assume ~2 px tall per cell-width
+    scale_w = avail_cols / img_w
+    needed_rows = int(img_h * scale_w / 2)
+    if needed_rows <= avail_rows:
+        return f",c={avail_cols}"
+    return f",r={avail_rows}"
+
+
 class AttachmentPreview(ScrollableContainer):
     """Widget to preview attachment content."""
 
@@ -163,18 +210,20 @@ class AttachmentPreview(ScrollableContainer):
             # Kitty graphics protocol only supports PNG natively (f=100)
             # For JPEG and other formats, we need to convert to PNG first
             # Check if it's PNG by magic bytes
+            img_width, img_height = 0, 0
             if image_data[:4] != b'\x89PNG':
                 # Try to convert to PNG using PIL if available
                 try:
                     from PIL import Image
                     import io
-                    
+
                     # Open image and convert to PNG
                     img = Image.open(io.BytesIO(image_data))
+                    img_width, img_height = img.size  # capture before conversion
                     # Convert to RGBA if necessary (handles various formats)
                     if img.mode not in ('RGB', 'RGBA'):
                         img = img.convert('RGBA')
-                    
+
                     # Save as PNG to bytes
                     png_buffer = io.BytesIO()
                     img.save(png_buffer, format='PNG')
@@ -196,39 +245,23 @@ class AttachmentPreview(ScrollableContainer):
             
             # Get image dimensions from PNG data (we converted to PNG above)
             # PNG dimensions are at bytes 16-24 (width: 16-20, height: 20-24)
-            img_width, img_height = 0, 0
-            if image_data[:4] == b'\x89PNG' and len(image_data) >= 24:
-                img_width = int.from_bytes(image_data[16:20], 'big')
-                img_height = int.from_bytes(image_data[20:24], 'big')
-            
+            if img_width == 0 or img_height == 0:
+                if image_data[:4] == b'\x89PNG' and len(image_data) >= 24:
+                    img_width = int.from_bytes(image_data[16:20], 'big')
+                    img_height = int.from_bytes(image_data[20:24], 'big')
+
             encoded = base64.standard_b64encode(image_data).decode("ascii")
-            
+
             # Get the preview container's region (self is AttachmentPreview)
-            # Use the container size, not the content widget which just has text
             container_region = self.region
-            
-            # Calculate available space (in terminal cells)
-            # Leave margin for borders, padding, and title
-            avail_width = max(10, container_region.width - 4)
-            avail_height = max(5, container_region.height - 6)  # -6 for border, padding, title
-            
-            # Determine which dimension to constrain to fit image in available space
-            # Terminal cells are roughly 2:1 (height:width in pixels), so 1 row ≈ 2 cols
-            # If image is W×H pixels, it would need W columns and H/2 rows (approx)
-            if img_width > 0 and img_height > 0:
-                # Calculate what rows we'd need if we use full available width
-                scale = avail_width / img_width
-                needed_rows = int((img_height * scale) / 2)  # /2 for cell aspect ratio
-                
-                if needed_rows > avail_height:
-                    # Image would be too tall, constrain by height instead
-                    size_params = f",r={avail_height}"
-                else:
-                    # Image fits, constrain by width
-                    size_params = f",c={avail_width}"
-            else:
-                # Can't determine dimensions, just use width
-                size_params = f",c={avail_width}"
+
+            # Available space in terminal cells (columns × rows)
+            avail_cols = max(10, container_region.width - 4)
+            avail_rows = max(5, container_region.height - 6)  # border, padding, title
+
+            # Determine size parameters: show at natural pixel size if it fits,
+            # otherwise scale down preserving aspect ratio.
+            size_params = _kitty_image_size_params(img_width, img_height, avail_cols, avail_rows)
             
             # Position cursor at the image location (inside the container)
             left = container_region.x + 2

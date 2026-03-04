@@ -94,6 +94,7 @@ class EmailMessage:
     size: int = 0
     from_addr: EmailAddress = field(default_factory=EmailAddress)
     reply_to_addr: Optional[EmailAddress] = None  # Reply-To header if present
+    list_post_addr: Optional[EmailAddress] = None  # List-Post header (mailing list address)
     to_addrs: List[EmailAddress] = field(default_factory=list)
     cc_addrs: List[EmailAddress] = field(default_factory=list)
     bcc_addrs: List[EmailAddress] = field(default_factory=list)
@@ -106,6 +107,7 @@ class EmailMessage:
     body_html: str = ""
     attachments: List[Dict[str, Any]] = field(default_factory=list)
     thread_level: int = 0  # For threading display
+    extra_headers: Dict[str, str] = field(default_factory=dict)  # Additional headers for full view
 
     @property
     def is_unread(self) -> bool:
@@ -227,10 +229,25 @@ class EmailMessage:
             msg.references = [str(r) for r in refs]
         msg.in_reply_to = get("in-reply-to", "")
 
-        # Parse Reply-To header
-        reply_to_data = get("reply-to", [])
-        if isinstance(reply_to_data, list) and reply_to_data:
-            msg.reply_to_addr = EmailAddress.from_mu(reply_to_data[0])
+        # Parse Reply-To header (mu may return list, dict, or string)
+        reply_to_data = get("reply-to", None)
+        if reply_to_data:
+            if isinstance(reply_to_data, list) and reply_to_data:
+                msg.reply_to_addr = EmailAddress.from_mu(reply_to_data[0])
+            elif not isinstance(reply_to_data, list):
+                msg.reply_to_addr = EmailAddress.from_mu(reply_to_data)
+
+        # Parse List-Post header (mailing list address, takes priority over Reply-To for replies)
+        list_post_data = get("list-post", None)
+        if list_post_data:
+            if isinstance(list_post_data, list) and list_post_data:
+                addr = EmailAddress.from_mu(list_post_data[0])
+                if addr.email:
+                    msg.list_post_addr = addr
+            elif not isinstance(list_post_data, list):
+                addr = EmailAddress.from_mu(list_post_data)
+                if addr.email:
+                    msg.list_post_addr = addr
 
         # Priority
         msg.priority = get("priority", "normal")
@@ -405,29 +422,38 @@ class MuInterface:
     def _compute_thread_levels(self, messages: List[EmailMessage]) -> None:
         """
         Compute thread_level for each message based on references.
-        
-        Only shows threading when the parent message is visible in the list.
-        Messages whose parents aren't visible are treated as root (level 0).
+
+        Uses parent_level + 1 so that threads with incomplete reference chains
+        (e.g. Outlook only puts the immediate parent in References, not the full
+        ancestry) still nest correctly.  Messages whose parent is not visible are
+        treated as roots (level 0).
         """
-        # Build a set of message-ids in our result set
-        visible_msgids = set()
-        for msg in messages:
+        # Build msgid → position mapping (earlier index = earlier in thread order)
+        msgid_to_idx: Dict[str, int] = {}
+        for idx, msg in enumerate(messages):
             if msg.msgid:
-                visible_msgids.add(msg.msgid)
-        
-        for msg in messages:
+                msgid_to_idx[msg.msgid] = idx
+
+        levels: List[int] = [0] * len(messages)
+
+        for idx, msg in enumerate(messages):
             if not msg.references:
-                msg.thread_level = 0
-            else:
-                # Count how many ancestors are visible in our list
-                # Walk the reference chain and count visible ones
-                visible_ancestors = 0
-                for ref in msg.references:
-                    if ref in visible_msgids:
-                        visible_ancestors += 1
-                
-                # Thread level is based on visible ancestors only
-                msg.thread_level = min(visible_ancestors, 10)  # Cap at 10
+                levels[idx] = 0
+                continue
+
+            # Walk references newest-first to find the closest visible ancestor
+            # (RFC 2822: last reference is the immediate parent)
+            parent_level = -1
+            for ref in reversed(msg.references):
+                parent_idx = msgid_to_idx.get(ref)
+                if parent_idx is not None and parent_idx < idx:
+                    parent_level = levels[parent_idx]
+                    break
+
+            levels[idx] = 0 if parent_level == -1 else parent_level + 1
+
+        for idx, msg in enumerate(messages):
+            msg.thread_level = min(levels[idx], 10)
 
     def find_by_msgid(self, msgid: str) -> Optional[EmailMessage]:
         """
@@ -455,14 +481,71 @@ class MuInterface:
         Returns:
             List of all messages in the thread
         """
+        # Collect all message-IDs we know about for this thread: the message
+        # itself plus its full reference chain.
+        known_ids: set[str] = set()
         if message.msgid:
-            query = f"msgid:{message.msgid} OR refs:{message.msgid}"
-        else:
+            known_ids.add(message.msgid)
+        for ref in message.references or []:
+            if ref:
+                known_ids.add(ref)
+
+        if not known_ids:
             # Fallback to subject-based threading
             subject = re.sub(r"^(re|fwd|fw):\s*", "", message.subject, flags=re.I)
-            query = f'subject:"{subject}"'
+            return self.find(f'subject:"{subject}"', threads=True, include_related=True)
 
-        return self.find(query, threads=True, include_related=True)
+        def _msgid_query(ids: set[str]) -> str:
+            return " OR ".join(f"msgid:{mid}" for mid in ids if mid)
+
+        # Pass 1: search by msgid for all known IDs with --include-related.
+        # include-related uses mu's internal ThreadId field to expand to the
+        # full "sub-thread" for each found message.
+        pass1 = self.find(_msgid_query(known_ids), threads=True, include_related=True)
+
+        # Expand with all msgids found in pass 1 (and their references).
+        expanded_ids: set[str] = set(known_ids)
+        for msg in pass1:
+            if msg.msgid:
+                expanded_ids.add(msg.msgid)
+            for ref in msg.references or []:
+                if ref:
+                    expanded_ids.add(ref)
+
+        if expanded_ids == known_ids:
+            return pass1
+
+        # Iteratively search using both msgid: and thread: until no new
+        # messages are found.  mu's ThreadId = first_ref if refs else msgid,
+        # so  thread:X  finds messages whose first reference is X — exactly
+        # the descendants whose short reference chains (one hop only) would
+        # otherwise be missed by a pure msgid-based search.
+        MAX_PASSES = 5
+        current_results = pass1
+        current_ids = expanded_ids
+
+        for _ in range(MAX_PASSES):
+            thread_parts = " OR ".join(f"thread:{mid}" for mid in current_ids if mid)
+            msgid_parts = _msgid_query(current_ids)
+            combined = f"({msgid_parts}) OR ({thread_parts})"
+            new_results = self.find(combined, threads=True, include_related=True)
+
+            # Expand our known ID set with newly found messages
+            new_ids: set[str] = set(current_ids)
+            for msg in new_results:
+                if msg.msgid:
+                    new_ids.add(msg.msgid)
+                for ref in msg.references or []:
+                    if ref:
+                        new_ids.add(ref)
+
+            if new_ids == current_ids:
+                return new_results  # Stable — no more to find
+
+            current_results = new_results
+            current_ids = new_ids
+
+        return current_results
 
     def view(self, path: str, mark_as_read: bool = True, msgid: str = "") -> Optional[EmailMessage]:
         """
@@ -496,7 +579,7 @@ class MuInterface:
             msg = EmailMessage()
             msg.path = path
             msg.subject = email_msg.get("Subject", "(no subject)")
-            msg.msgid = email_msg.get("Message-ID", "")
+            msg.msgid = email_msg.get("Message-ID", "").strip().strip("<>")
 
             # Parse From
             from_header = email_msg.get("From", "")
@@ -524,10 +607,29 @@ class MuInterface:
                 msg.bcc_addrs = [EmailAddress(name=name, email=email) 
                                 for name, email in parsed_addrs if email]
 
-            # Parse Reply-To
+            # Parse Reply-To (use getaddresses for consistent multi-address handling)
             reply_to_header = email_msg.get("Reply-To", "")
             if reply_to_header:
-                msg.reply_to_addr = EmailAddress.from_mu(reply_to_header)
+                parsed_reply_to = email_utils.getaddresses([reply_to_header])
+                if parsed_reply_to and parsed_reply_to[0][1]:
+                    name, email = parsed_reply_to[0]
+                    msg.reply_to_addr = EmailAddress(name=name, email=email)
+
+            # Parse List-Post header — extract the mailto: address for mailing list replies
+            list_post_header = email_msg.get("List-Post", "")
+            if list_post_header:
+                mailto_match = re.search(r"<mailto:([^>]+)>", list_post_header, re.IGNORECASE)
+                if mailto_match:
+                    msg.list_post_addr = EmailAddress(email=mailto_match.group(1))
+
+            # Parse In-Reply-To and References
+            in_reply_to_header = email_msg.get("In-Reply-To", "")
+            if in_reply_to_header:
+                msg.in_reply_to = str(in_reply_to_header).strip()
+
+            references_header = email_msg.get("References", "")
+            if references_header:
+                msg.references = references_header.split()
 
             # Parse date
             date_header = email_msg.get("Date")
@@ -544,15 +646,21 @@ class MuInterface:
             msg.attachments = []
 
             if email_msg.is_multipart():
-                # Track MIME part index for mu extract --parts command
-                # mu only counts leaf parts (non-multipart), not container parts
+                # Track MIME part index for mu extract --parts command.
+                # mu numbers parts in depth-first walk order starting at 1, but
+                # skips structural multipart containers (mixed, alternative, related…).
+                # Exception: multipart/signed and multipart/encrypted ARE counted
+                # because mu lists them as extractable parts.
+                _COUNTED_MULTIPART = {"multipart/signed", "multipart/encrypted"}
                 part_index = 0
                 for part in email_msg.walk():
                     content_type = part.get_content_type()
-                    # Skip multipart containers - mu doesn't count them
-                    if content_type.startswith("multipart/"):
+                    if content_type.startswith("multipart/") and content_type not in _COUNTED_MULTIPART:
                         continue
                     part_index += 1
+                    if content_type.startswith("multipart/"):
+                        # Counted but not extractable as an attachment.
+                        continue
                     content_disposition = part.get("Content-Disposition", "")
                     filename = part.get_filename()
 
@@ -620,6 +728,26 @@ class MuInterface:
                         msg.body_html = text
                     else:
                         msg.body_txt = text
+
+            # Capture extra headers for full-header display
+            _EXTRA_HEADER_NAMES = [
+                "Return-Path",
+                "Sender",
+                "X-Mailer",
+                "User-Agent",
+                "X-Spam-Status",
+                "X-Spam-Score",
+                "Authentication-Results",
+                "X-Originating-IP",
+            ]
+            for hdr_name in _EXTRA_HEADER_NAMES:
+                val = email_msg.get(hdr_name, "")
+                if val:
+                    msg.extra_headers[hdr_name] = str(val).strip()
+            # Include the first Received header (shows originating server/IP)
+            received = email_msg.get_all("Received") or []
+            if received:
+                msg.extra_headers["Received"] = str(received[-1]).strip()
 
             # Mark as read if requested and update path if it changed
             if mark_as_read and self._is_new_or_unread(path):

@@ -105,6 +105,7 @@ class HtmlConfig:
     """HTML rendering configuration."""
     renderer: str = "html2text"
     open_links_in_browser: bool = True
+    browser_tmp_dir: str = ""
 
 
 @dataclass

@@ -6,10 +6,15 @@ Displays a single email message with headers and body.
 
 from __future__ import annotations
 
+import hashlib
+import html
 import re
-import subprocess
+import tempfile
 import webbrowser
+from pathlib import Path
 from typing import Callable, Optional
+
+from rich.markup import escape as rich_escape
 
 from textual import events
 from textual.app import ComposeResult
@@ -21,6 +26,26 @@ from textual.reactive import reactive
 from bor.tabs.base import BaseTab
 from bor.mu import EmailMessage, MuInterface
 from bor.config import get_config
+
+
+_URL_RE = re.compile(r'(https?://\S+)')
+
+
+def _make_body_markup(content: str) -> str:
+    """Escape Rich markup in plain-text body and wrap URLs in clickable link tags."""
+    parts = _URL_RE.split(content)
+    result = []
+    for i, part in enumerate(parts):
+        if i % 2 == 1:  # URL
+            # Strip common trailing punctuation plus chars that close Markdown/HTML constructs
+            url = part.rstrip('.,;:!?)]>')
+            trailing = part[len(url):]
+            # Escape chars that would break Rich's [link="url"] attribute syntax
+            safe_url = url.replace('"', '%22').replace(']', '%5D')
+            result.append(f'[link="{safe_url}"]{rich_escape(url)}[/link]{rich_escape(trailing)}')
+        else:
+            result.append(rich_escape(part))
+    return "".join(result)
 
 
 def html_to_text(html: str) -> str:
@@ -114,42 +139,86 @@ class MessageHeader(Static):
         lines = []
 
         # From
-        lines.append(f"[bold]From:[/bold]    {self.message.from_addr}")
+        lines.append(f"[bold]From:[/bold]    {rich_escape(str(self.message.from_addr))}")
+
+        # Show effective reply address when it differs from From
+        if self.message.list_post_addr and self.message.list_post_addr.email:
+            # Mailing list: show the list address (this is where 'r' will send)
+            if self.message.list_post_addr.email != self.message.from_addr.email:
+                lines.append(f"[bold]List:[/bold]    {rich_escape(self.message.list_post_addr.email)}")
+        elif (self.message.reply_to_addr and
+                self.message.reply_to_addr.email != self.message.from_addr.email):
+            lines.append(f"[bold]Reply-To:[/bold] {rich_escape(str(self.message.reply_to_addr))}")
 
         # To
-        to_list = ", ".join(str(addr) for addr in self.message.to_addrs)
+        to_list = rich_escape(", ".join(str(addr) for addr in self.message.to_addrs))
         lines.append(f"[bold]To:[/bold]      {to_list}")
 
         # CC
         if self.message.cc_addrs:
-            cc_list = ", ".join(str(addr) for addr in self.message.cc_addrs)
+            cc_list = rich_escape(", ".join(str(addr) for addr in self.message.cc_addrs))
             lines.append(f"[bold]CC:[/bold]      {cc_list}")
 
         # BCC (only in full header mode)
         if self.show_full and self.message.bcc_addrs:
-            bcc_list = ", ".join(str(addr) for addr in self.message.bcc_addrs)
+            bcc_list = rich_escape(", ".join(str(addr) for addr in self.message.bcc_addrs))
             lines.append(f"[bold]BCC:[/bold]     {bcc_list}")
 
         # Date
         date_str = ""
         if self.message.date:
             date_str = self.message.date.strftime("%Y-%m-%d %H:%M:%S %Z")
-        lines.append(f"[bold]Date:[/bold]    {date_str}")
+        lines.append(f"[bold]Date:[/bold]    {rich_escape(date_str)}")
 
         # Subject
-        lines.append(f"[bold]Subject:[/bold] {self.message.subject}")
+        lines.append(f"[bold]Subject:[/bold] {rich_escape(self.message.subject)}")
 
         # Attachments count
         if self.message.attachments:
             count = len(self.message.attachments)
             lines.append(f"[bold]Attach:[/bold]  {count} attachment(s)")
 
-        # Full headers
+        # Full / rich headers
         if self.show_full:
+            lines.append("")  # visual separator
+
             if self.message.msgid:
-                lines.append(f"[bold]Msg-ID:[/bold]  {self.message.msgid}")
+                lines.append(f"[bold]Message-ID:[/bold] {rich_escape(self.message.msgid)}")
             if self.message.in_reply_to:
-                lines.append(f"[bold]Reply-To:[/bold] {self.message.in_reply_to}")
+                lines.append(f"[bold]In-Reply-To:[/bold] {rich_escape(self.message.in_reply_to)}")
+            if self.message.references:
+                n = len(self.message.references)
+                sample = " ".join(self.message.references[-2:])
+                suffix = f" (… {n} total)" if n > 2 else ""
+                lines.append(f"[bold]References:[/bold] {rich_escape(sample)}{suffix}")
+
+            if self.message.priority and self.message.priority != "normal":
+                lines.append(f"[bold]Priority:[/bold]   {rich_escape(self.message.priority)}")
+
+            if self.message.size:
+                size = self.message.size
+                if size >= 1024 * 1024:
+                    size_str = f"{size / (1024 * 1024):.1f} MB"
+                elif size >= 1024:
+                    size_str = f"{size / 1024:.1f} KB"
+                else:
+                    size_str = f"{size} B"
+                lines.append(f"[bold]Size:[/bold]       {size_str}")
+
+            if self.message.maildir:
+                lines.append(f"[bold]Folder:[/bold]     {rich_escape(self.message.maildir)}")
+
+            if self.message.flags:
+                lines.append(f"[bold]Flags:[/bold]      {rich_escape(', '.join(self.message.flags))}")
+
+            if self.message.tags:
+                lines.append(f"[bold]Tags:[/bold]       {rich_escape(', '.join(self.message.tags))}")
+
+            # Extra headers captured from the raw file
+            for hdr_name, val in self.message.extra_headers.items():
+                # Truncate very long values (e.g. Authentication-Results)
+                display_val = val if len(val) <= 100 else val[:97] + "…"
+                lines.append(f"[bold]{rich_escape(hdr_name)}:[/bold] {rich_escape(display_val)}")
 
         return "\n".join(lines)
 
@@ -298,6 +367,7 @@ class MessageViewWidget(BaseTab):
         Binding("c", "compose", "Compose"),
         Binding("z", "attachments", "Attachments"),
         Binding("o", "open_url", "Open URL"),
+        Binding("v", "view_in_browser", "View in Browser"),
         Binding("ctrl+r", "toggle_full_headers", "Full Headers"),
     ]
 
@@ -345,7 +415,7 @@ class MessageViewWidget(BaseTab):
         with ScrollableContainer():
             yield MessageHeader(self._message_ref, id="msg-header")
             yield Static("", id="attachment-info", classes="attachment-info")
-            yield Static("Loading...", id="msg-body", markup=False)
+            yield Static("Loading...", id="msg-body")
         yield ConfirmBar("", id="confirm-bar")
         yield FlagBar("", id="flag-bar")
         yield ReplyBar("", id="reply-bar")
@@ -408,7 +478,10 @@ class MessageViewWidget(BaseTab):
 
             # Update body
             body = self.query_one("#msg-body", Static)
-            body.update(self._content)
+            try:
+                body.update(_make_body_markup(self._content))
+            except Exception:
+                body.update(rich_escape(self._content))
 
             # Update tab title
             title = self._full_message.subject[:20] + "..." if len(self._full_message.subject) > 20 else self._full_message.subject
@@ -485,17 +558,17 @@ class MessageViewWidget(BaseTab):
         Navigation follows the index order (threaded or date-sorted).
         """
         # Find current message's position in the index by msgid
-        current_msgid = self._message_ref.msgid
+        current_msgid = self._message_ref.msgid.strip().strip("<>")
         current_idx = None
         for idx, msg in enumerate(self.bor_app._current_messages):
-            if msg.msgid == current_msgid:
+            if msg.msgid.strip().strip("<>") == current_msgid:
                 current_idx = idx
                 break
-        
+
         # If current message is not in index, do nothing
         if current_idx is None:
             return
-        
+
         # Check if there's a next message
         if current_idx + 1 < len(self.bor_app._current_messages):
             self.bor_app._current_index = current_idx + 1
@@ -510,17 +583,17 @@ class MessageViewWidget(BaseTab):
         Navigation follows the index order (threaded or date-sorted).
         """
         # Find current message's position in the index by msgid
-        current_msgid = self._message_ref.msgid
+        current_msgid = self._message_ref.msgid.strip().strip("<>")
         current_idx = None
         for idx, msg in enumerate(self.bor_app._current_messages):
-            if msg.msgid == current_msgid:
+            if msg.msgid.strip().strip("<>") == current_msgid:
                 current_idx = idx
                 break
-        
+
         # If current message is not in index, do nothing
         if current_idx is None:
             return
-        
+
         # Check if there's a previous message
         if current_idx > 0:
             self.bor_app._current_index = current_idx - 1
@@ -716,7 +789,7 @@ class MessageViewWidget(BaseTab):
         if self._full_message:
             header = self.query_one("#msg-header", MessageHeader)
             header.show_full = self.show_full_headers
-            header.refresh()
+            header.update_message(self._full_message)
 
     def on_click(self, event: events.Click) -> None:
         """Handle clicks on links."""
@@ -782,3 +855,73 @@ class MessageViewWidget(BaseTab):
             webbrowser.open(url)
         except Exception:
             pass
+
+    def action_view_in_browser(self) -> None:
+        """Open the current message as HTML in the system browser."""
+        if not self._full_message:
+            self.notify("No message loaded")
+            return
+
+        msg = self._full_message
+
+        if msg.body_html:
+            body_html = msg.body_html
+            # If the HTML doesn't have a full document structure, wrap it
+            if "<html" not in body_html.lower():
+                body_html = f"<html><body>{body_html}</body></html>"
+        else:
+            # Wrap plain text in a minimal HTML page
+            plain = msg.body_txt or "(No message content)"
+            escaped = html.escape(plain)
+            body_html = (
+                "<html><body>"
+                f"<pre style='font-family:monospace;white-space:pre-wrap'>{escaped}</pre>"
+                "</body></html>"
+            )
+
+        # Build header block to prepend
+        from_str = html.escape(str(msg.from_addr))
+        to_str = html.escape(", ".join(str(a) for a in msg.to_addrs))
+        date_str = html.escape(msg.date.strftime("%Y-%m-%d %H:%M:%S %Z") if msg.date else "")
+        subject_str = html.escape(msg.subject)
+
+        header_html = (
+            "<div style='font-family:sans-serif;border-bottom:1px solid #ccc;"
+            "padding:8px;margin-bottom:12px;background:#f5f5f5'>"
+            f"<b>From:</b> {from_str}<br>"
+            f"<b>To:</b> {to_str}<br>"
+            f"<b>Date:</b> {date_str}<br>"
+            f"<b>Subject:</b> {subject_str}"
+            "</div>"
+        )
+
+        # Inject header just after <body> (or prepend if not found)
+        lower = body_html.lower()
+        body_tag_end = lower.find("<body")
+        if body_tag_end != -1:
+            body_tag_end = body_html.find(">", body_tag_end) + 1
+            full_html = body_html[:body_tag_end] + header_html + body_html[body_tag_end:]
+        else:
+            full_html = header_html + body_html
+
+        try:
+            config = get_config()
+            tmp_dir_str = config.html.browser_tmp_dir
+            tmp_dir = (
+                Path(tmp_dir_str).expanduser()
+                if tmp_dir_str
+                else Path(tempfile.gettempdir())
+            )
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+
+            # Use a deterministic filename based on the message identifier so
+            # that re-opening the same message reuses the file instead of
+            # accumulating many bor_msg_*.html files.
+            key = msg.msgid or (str(msg.docid) if msg.docid else full_html)
+            file_hash = hashlib.sha256(key.encode()).hexdigest()[:16]
+            tmp_path = tmp_dir / f"bor_msg_{file_hash}.html"
+            tmp_path.write_text(full_html, encoding="utf-8")
+            webbrowser.open(tmp_path.as_uri())
+            self.notify("Message opened in browser")
+        except Exception as e:
+            self.notify(f"Could not open browser: {e}")
