@@ -6,6 +6,7 @@ Displays a single email message with headers and body.
 
 from __future__ import annotations
 
+import hashlib
 import html
 import re
 import subprocess
@@ -907,16 +908,21 @@ class MessageViewWidget(BaseTab):
         try:
             config = get_config()
             tmp_dir_str = config.html.browser_tmp_dir
-            tmp_dir = Path(tmp_dir_str).expanduser() if tmp_dir_str else None
-            if tmp_dir is not None:
-                tmp_dir.mkdir(parents=True, exist_ok=True)
-            tmp = tempfile.NamedTemporaryFile(
-                suffix=".html", prefix="bor_msg_", delete=False,
-                mode="w", encoding="utf-8", dir=tmp_dir,
+            tmp_dir = (
+                Path(tmp_dir_str).expanduser()
+                if tmp_dir_str
+                else Path(tempfile.gettempdir())
             )
-            tmp.write(full_html)
-            tmp.close()
-            webbrowser.open(Path(tmp.name).as_uri())
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+
+            # Use a deterministic filename based on the message identifier so
+            # that re-opening the same message reuses the file instead of
+            # accumulating many bor_msg_*.html files.
+            key = msg.msgid or (str(msg.docid) if msg.docid else full_html)
+            file_hash = hashlib.sha256(key.encode()).hexdigest()[:16]
+            tmp_path = tmp_dir / f"bor_msg_{file_hash}.html"
+            tmp_path.write_text(full_html, encoding="utf-8")
+            webbrowser.open(tmp_path.as_uri())
             self.notify("Message opened in browser")
         except Exception as e:
             self.notify(f"Could not open browser: {e}")
