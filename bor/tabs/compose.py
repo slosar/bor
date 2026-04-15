@@ -39,6 +39,7 @@ except ImportError:
 from bor.tabs.base import BaseTab
 from bor.mu import EmailMessage, EmailAddress
 from bor.config import get_config, load_mailrc_aliases
+from bor.editing import copy_to_clipboard, kill_input_line, kill_text_line
 
 
 # Custom messages for Ctrl+L commands
@@ -325,6 +326,14 @@ class AddressInput(CtrlLMixin, Input):
             event.prevent_default()
             event.stop()
             return
+        elif event.key == "ctrl+k":
+            new_value, new_cursor, killed_text = kill_input_line(self.value, self.cursor_position)
+            copy_to_clipboard(killed_text)
+            self.value = new_value
+            self.cursor_position = new_cursor
+            event.prevent_default()
+            event.stop()
+            return
         
         # Check Ctrl+L sequences first
         if self.handle_ctrl_l_key(event):
@@ -398,6 +407,14 @@ class SubjectInput(CtrlLMixin, Input):
             if HAS_PYPERCLIP:
                 pyperclip.copy(self.value)
                 self.value = ""
+            event.prevent_default()
+            event.stop()
+            return
+        elif event.key == "ctrl+k":
+            new_value, new_cursor, killed_text = kill_input_line(self.value, self.cursor_position)
+            copy_to_clipboard(killed_text)
+            self.value = new_value
+            self.cursor_position = new_cursor
             event.prevent_default()
             event.stop()
             return
@@ -500,6 +517,15 @@ class ComposeTextArea(CtrlLMixin, TextArea):
         chars[left_index], chars[right_index] = chars[right_index], chars[left_index]
         return "".join(chars), new_cursor
 
+    def _kill_line_at_cursor(self) -> None:
+        """Kill from the cursor to the end of the current line and copy it."""
+        row, col = self.cursor_location
+        cursor_index = self._cursor_to_index(self.text, row, col)
+        new_text, new_index, killed_text = kill_text_line(self.text, cursor_index)
+        copy_to_clipboard(killed_text)
+        self.text = new_text
+        self.cursor_location = self._index_to_cursor(new_text, new_index)
+
     def _on_key(self, event: events.Key) -> None:
         """Handle key events for text completion and commands."""
         # Handle clipboard operations - must prevent default to avoid SIGINT
@@ -530,6 +556,11 @@ class ComposeTextArea(CtrlLMixin, TextArea):
                     if start > end:
                         start, end = end, start
                     self.delete(start, end)
+            event.prevent_default()
+            event.stop()
+            return
+        elif event.key == "ctrl+k":
+            self._kill_line_at_cursor()
             event.prevent_default()
             event.stop()
             return
@@ -647,7 +678,14 @@ class FilePathInput(Input):
 
     def on_key(self, event: events.Key) -> None:
         """Handle key events for completion."""
-        if event.key == "tab":
+        if event.key == "ctrl+k":
+            new_value, new_cursor, killed_text = kill_input_line(self.value, self.cursor_position)
+            copy_to_clipboard(killed_text)
+            self.value = new_value
+            self.cursor_position = new_cursor
+            event.prevent_default()
+            event.stop()
+        elif event.key == "tab":
             current_value = self.value
             
             # Check if we're cycling through existing completions

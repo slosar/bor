@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from bor.editing import kill_input_line, kill_text_line
 from bor.mu import EmailMessage, EmailAddress
 from bor.tabs.compose import ComposeWidget, AddressInput, ComposeTextArea
 import email.utils
@@ -352,3 +353,27 @@ def test_transpose_does_not_cross_newline() -> None:
     text, index = ComposeTextArea._transpose_at_cursor(source, 2)
     assert text == source
     assert index == 2
+
+
+def test_kill_input_line_returns_killed_suffix() -> None:
+    """Ctrl+K on single-line inputs should kill to end and return copied text."""
+    text, cursor, killed = kill_input_line("hello world", 6)
+    assert text == "hello "
+    assert cursor == 6
+    assert killed == "world"
+
+
+def test_kill_text_line_kills_to_end_of_current_line() -> None:
+    """Ctrl+K in editor text should kill only the remainder of the current line."""
+    text, cursor, killed = kill_text_line("alpha\nbeta\ngamma", 7)
+    assert text == "alpha\nb\ngamma"
+    assert cursor == 7
+    assert killed == "eta"
+
+
+def test_kill_text_line_kills_newline_at_end_of_line() -> None:
+    """Ctrl+K at end of line should remove the newline, matching emacs behavior."""
+    text, cursor, killed = kill_text_line("alpha\nbeta", 5)
+    assert text == "alphabeta"
+    assert cursor == 5
+    assert killed == "\n"

@@ -22,6 +22,7 @@ from textual.coordinate import Coordinate
 from bor.tabs.base import BaseTab
 from bor.mu import EmailMessage
 from bor.config import get_config
+from bor.editing import copy_to_clipboard, kill_input_line
 
 
 _HISTORY_FILE = Path.home() / ".local" / "share" / "bor" / "search_history"
@@ -93,6 +94,14 @@ class SearchInput(Input):
                 self.screen.query_one(DataTable).focus()
             except Exception:
                 pass
+            event.prevent_default()
+            event.stop()
+
+        elif event.key == "ctrl+k":
+            new_value, new_cursor, killed_text = kill_input_line(self.value, self.cursor_position)
+            copy_to_clipboard(killed_text)
+            self.value = new_value
+            self.cursor_position = new_cursor
             event.prevent_default()
             event.stop()
 
