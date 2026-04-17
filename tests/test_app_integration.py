@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch, AsyncMock
 from datetime import datetime
 
 from textual.widgets import DataTable, Static
+from bor.tabs.compose import ComposeWidget, FilePathInput, BulkAttachmentList
 
 # Mock EmailMessage for testing
 class MockEmailMessage:
@@ -432,6 +433,52 @@ class TestIndexRefreshOnReturn:
                     await pilot.pause()
 
                     assert mock_mu_interface.find.call_count > initial_find_calls
+
+
+class TestComposeBulkAttachments:
+    """Test bulk attachment flow in compose."""
+
+    @pytest.mark.asyncio
+    async def test_ctrl_l_ctrl_z_attaches_marked_files(
+        self, mock_mu_interface, mock_config, tmp_path
+    ):
+        """Ctrl+L Ctrl+Z should open a directory picker and attach marked files."""
+        first = tmp_path / "alpha.txt"
+        second = tmp_path / "beta.txt"
+        ignored = tmp_path / "subdir"
+        first.write_text("alpha", encoding="utf-8")
+        second.write_text("beta", encoding="utf-8")
+        ignored.mkdir()
+
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("c")
+                    await pilot.pause()
+
+                    await pilot.press("ctrl+l", "z")
+                    await pilot.pause()
+
+                    path_input = app.query_one("#attachment-path-input", FilePathInput)
+                    assert path_input.has_focus
+                    path_input.value = str(tmp_path) + "/"
+                    path_input.cursor_position = len(path_input.value)
+
+                    await pilot.press("enter")
+                    await pilot.pause()
+
+                    widget = app.query_one(ComposeWidget)
+                    picker = app.query_one("#bulk-attachment-list", BulkAttachmentList)
+                    assert picker.has_focus
+
+                    await pilot.press("space", "down", "space", "enter")
+                    await pilot.pause()
+
+                    assert [path.name for path in widget.attachments] == ["alpha.txt", "beta.txt"]
 
 
 class TestQuit:

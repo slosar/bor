@@ -179,8 +179,12 @@ bor
 | Ctrl+L L | Send message |
 | Ctrl+L D | Save draft |
 | Ctrl+L X | Cancel |
+| Ctrl+L Z | Attach many files from a directory |
 | Ctrl+I | Insert file |
 | Ctrl+A | Attach file |
+
+`Ctrl+L Z` first prompts for a directory with tab-completion, then opens a file picker where
+`Space` marks files, `Enter` attaches the marked set, `Esc` cancels, and `Ctrl+A` toggles all.
 
 ### Attachments
 

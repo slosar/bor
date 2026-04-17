@@ -317,6 +317,17 @@ def test_read_insert_file_rejects_non_utf8(tmp_path: Path) -> None:
         ComposeWidget._read_insert_file(source)
 
 
+def test_list_bulk_attachable_files_returns_sorted_files_only(tmp_path: Path) -> None:
+    """Bulk attach helper should list direct child files, sorted by name."""
+    (tmp_path / "z-last.txt").write_text("z", encoding="utf-8")
+    (tmp_path / "A-first.txt").write_text("a", encoding="utf-8")
+    (tmp_path / "subdir").mkdir()
+
+    files = ComposeWidget._list_bulk_attachable_files(tmp_path)
+
+    assert [path.name for path in files] == ["A-first.txt", "z-last.txt"]
+
+
 def test_delete_previous_word_removes_word_and_whitespace() -> None:
     """Backward delete should remove previous word and separator spacing."""
     source = "hello   world"

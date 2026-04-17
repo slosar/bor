@@ -26,7 +26,7 @@ from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Vertical, Horizontal
-from textual.widgets import Input, TextArea, Static, Label
+from textual.widgets import Input, TextArea, Static, Label, ListView, ListItem
 from textual.reactive import reactive
 from textual.message import Message
 
@@ -85,6 +85,11 @@ class AttachFile(ComposeCommand):
     pass
 
 
+class AttachFilesFromDirectory(ComposeCommand):
+    """Command to attach multiple files from a directory."""
+    pass
+
+
 class CtrlLMixin:
     """
     Mixin for handling Ctrl+L command sequences.
@@ -99,6 +104,7 @@ class CtrlLMixin:
     - S: Go to Subject field
     - E: Go to Editor
     - A: Attach file
+    - Z: Attach many files from a directory
     """
     
     _ctrl_l_pressed: bool = False
@@ -160,6 +166,11 @@ class CtrlLMixin:
                 return True
             elif key == "a":
                 self.post_message(AttachFile())
+                event.prevent_default()
+                event.stop()
+                return True
+            elif key == "z":
+                self.post_message(AttachFilesFromDirectory())
                 event.prevent_default()
                 event.stop()
                 return True
@@ -748,6 +759,90 @@ class FilePathInput(Input):
             super().__init__()
 
 
+class BulkAttachmentItem(ListItem):
+    """List item representing a file that may be attached."""
+
+    def __init__(self, path: Path, selected: bool = False, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.path = path
+        self.selected = selected
+
+    def compose(self) -> ComposeResult:
+        """Create the list item."""
+        yield Static(self._render_label())
+
+    def toggle(self) -> None:
+        """Toggle whether this file is selected for attachment."""
+        self.selected = not self.selected
+        self._refresh()
+
+    def set_selected(self, selected: bool) -> None:
+        """Set the selected state."""
+        if self.selected != selected:
+            self.selected = selected
+            self._refresh()
+
+    def _refresh(self) -> None:
+        """Refresh the rendered label."""
+        self.query_one(Static).update(self._render_label())
+
+    def _render_label(self) -> str:
+        """Return the display string for this item."""
+        marker = "[x]" if self.selected else "[ ]"
+        size = self.path.stat().st_size if self.path.exists() else 0
+        if size < 1024:
+            size_text = f"{size} B"
+        elif size < 1024 * 1024:
+            size_text = f"{size / 1024:.1f} KB"
+        else:
+            size_text = f"{size / (1024 * 1024):.1f} MB"
+        return f"{marker} {self.path.name} ({size_text})"
+
+
+class BulkAttachmentList(ListView):
+    """Keyboard-friendly file picker for bulk attachment selection."""
+
+    class Toggled(Message):
+        """Posted when the highlighted item is toggled."""
+
+        def __init__(self, item: BulkAttachmentItem) -> None:
+            self.item = item
+            super().__init__()
+
+    class Cancelled(Message):
+        """Posted when the picker is cancelled."""
+
+        pass
+
+    class SelectAllToggled(Message):
+        """Posted when the user requests a select-all toggle."""
+
+        pass
+
+    def on_key(self, event: events.Key) -> None:
+        """Handle picker-specific key bindings."""
+        if event.key == "space":
+            item = self.highlighted_child
+            if isinstance(item, BulkAttachmentItem):
+                item.toggle()
+                self.post_message(self.Toggled(item))
+            event.prevent_default()
+            event.stop()
+            return
+
+        if event.key == "ctrl+a":
+            self.post_message(self.SelectAllToggled())
+            event.prevent_default()
+            event.stop()
+            return
+
+        if event.key == "escape":
+            self.post_message(self.Cancelled())
+            event.prevent_default()
+            event.stop()
+            return
+
+
 class ComposeWidget(BaseTab):
     """
     Compose widget for email composition.
@@ -837,6 +932,30 @@ class ComposeWidget(BaseTab):
         border: solid $surface-darken-1;
     }
 
+    ComposeWidget .bulk-attachment-picker {
+        height: auto;
+        max-height: 18;
+        padding: 0 1 1 1;
+        background: $panel;
+        border: solid $accent;
+    }
+
+    ComposeWidget .bulk-attachment-picker.hidden {
+        display: none;
+    }
+
+    ComposeWidget .bulk-attachment-picker-title {
+        height: auto;
+        padding: 0 0 1 0;
+        color: $text;
+    }
+
+    ComposeWidget #bulk-attachment-list {
+        height: 12;
+        border: solid $surface-darken-1;
+        background: $surface;
+    }
+
     ComposeWidget .status-bar {
         height: 1;
         dock: bottom;
@@ -874,6 +993,7 @@ class ComposeWidget(BaseTab):
         self._text_aliases: dict = {}
         self._last_attachment_dir: Path = Path.home()  # Track last used directory
         self._file_path_mode: Optional[str] = None
+        self._bulk_picker_directory: Optional[Path] = None
         self._draft_deleted: bool = False
 
     def compose(self) -> ComposeResult:
@@ -907,8 +1027,15 @@ class ComposeWidget(BaseTab):
                     yield Label("", id="file-path-input-label", classes="attachment-input-label")
                     yield FilePathInput(id="attachment-path-input", classes="attachment-path-input")
 
+            with Vertical(classes="bulk-attachment-picker hidden", id="bulk-attachment-picker"):
+                yield Label("", id="bulk-attachment-picker-title", classes="bulk-attachment-picker-title")
+                yield BulkAttachmentList(id="bulk-attachment-list")
+
             with Horizontal(classes="status-bar"):
-                yield Label("Ctrl+L: L=Send D=Draft X=Cancel | T/C/B/S/E=Jump to field | Tab=Next", id="status")
+                yield Label(
+                    "Ctrl+L: L=Send D=Draft X=Cancel A=Attach Z=Bulk Attach | T/C/B/S/E=Jump | Tab=Next",
+                    id="status",
+                )
 
     def on_mount(self) -> None:
         """Handle widget mount."""
@@ -1522,6 +1649,10 @@ class ComposeWidget(BaseTab):
         """Handle attach file command (Ctrl-L A)."""
         self.action_attach_file()
 
+    def on_attach_files_from_directory(self, event: AttachFilesFromDirectory) -> None:
+        """Handle bulk attach command (Ctrl-L Z)."""
+        self.action_attach_files_from_directory()
+
     def on_file_path_input_submitted(self, event: FilePathInput.Submitted) -> None:
         """Handle file path submitted for attachment or insertion."""
         path = Path(event.path).expanduser()
@@ -1530,12 +1661,27 @@ class ComposeWidget(BaseTab):
         # Hide the input bar
         self.query_one("#attachment-input-bar", Vertical).add_class("hidden")
         
+        if mode == "bulk_attach_dir":
+            if not path.exists():
+                self.notify(f"Directory not found: {path}", severity="error")
+                self.query_one("#body-input").focus()
+                return
+
+            if not path.is_dir():
+                self.notify(f"Not a directory: {path}", severity="error")
+                self.query_one("#body-input").focus()
+                return
+
+            self._last_attachment_dir = path
+            self._show_bulk_attachment_picker(path)
+            return
+
         # Validate the file
         if not path.exists():
             self.notify(f"File not found: {path}", severity="error")
             self.query_one("#body-input").focus()
             return
-            
+
         if not path.is_file():
             self.notify(f"Not a file: {path}", severity="error")
             self.query_one("#body-input").focus()
@@ -1582,6 +1728,63 @@ class ComposeWidget(BaseTab):
         # Return focus to body
         self.query_one("#body-input").focus()
 
+    def on_bulk_attachment_list_toggled(self, event: BulkAttachmentList.Toggled) -> None:
+        """Update picker instructions after a file is toggled."""
+        self._update_bulk_picker_title()
+
+    def on_bulk_attachment_list_cancelled(self, event: BulkAttachmentList.Cancelled) -> None:
+        """Close the bulk picker without attaching files."""
+        self._hide_bulk_attachment_picker()
+        self.query_one("#body-input", ComposeTextArea).focus()
+
+    def on_bulk_attachment_list_select_all_toggled(
+        self, event: BulkAttachmentList.SelectAllToggled
+    ) -> None:
+        """Toggle all files in the picker."""
+        list_view = self.query_one("#bulk-attachment-list", BulkAttachmentList)
+        items = [
+            item for item in list_view.children if isinstance(item, BulkAttachmentItem)
+        ]
+        should_select = any(not item.selected for item in items)
+        for item in items:
+            item.set_selected(should_select)
+        self._update_bulk_picker_title()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        """Handle confirming the bulk attachment picker."""
+        if not isinstance(event.list_view, BulkAttachmentList):
+            return
+
+        selected_paths = self._get_selected_bulk_attachment_paths()
+        if not selected_paths:
+            self.notify("No files selected", severity="warning")
+            return
+
+        added = []
+        duplicates = []
+        for path in selected_paths:
+            if path in self.attachments:
+                duplicates.append(path.name)
+                continue
+            self.attachments.append(path)
+            added.append(path.name)
+
+        self._update_attachment_bar()
+        self._last_attachment_dir = self._bulk_picker_directory or self._last_attachment_dir
+        self._hide_bulk_attachment_picker()
+        self.query_one("#body-input", ComposeTextArea).focus()
+
+        if added:
+            self.notify(f"Attached {len(added)} file(s)")
+        elif duplicates:
+            self.notify("Selected files were already attached", severity="warning")
+
+        if duplicates and added:
+            self.notify(
+                f"Skipped {len(duplicates)} already attached file(s)",
+                severity="warning",
+            )
+
     def on_file_path_input_completions_changed(self, event: FilePathInput.CompletionsChanged) -> None:
         """Handle completions list change."""
         label = self.query_one("#attachment-completions", Label)
@@ -1618,9 +1821,14 @@ class ComposeWidget(BaseTab):
         """Attach a file."""
         self._show_file_path_input(mode="attach", label="Attach file: ")
 
+    def action_attach_files_from_directory(self) -> None:
+        """Attach multiple files from a selected directory."""
+        self._show_file_path_input(mode="bulk_attach_dir", label="Attach files from directory: ")
+
     def _show_file_path_input(self, mode: str, label: str) -> None:
         """Show the path input UI used for attach/insert actions."""
         self._file_path_mode = mode
+        self._hide_bulk_attachment_picker()
 
         # Show the attachment input bar
         self.query_one("#attachment-input-bar", Vertical).remove_class("hidden")
@@ -1634,3 +1842,63 @@ class ComposeWidget(BaseTab):
         path_input.value = str(self._last_attachment_dir) + "/"
         path_input.cursor_position = len(path_input.value)
         path_input.focus()
+
+    @staticmethod
+    def _list_bulk_attachable_files(directory: Path) -> List[Path]:
+        """Return the direct child files in a directory, sorted by name."""
+        files: List[Path] = []
+        try:
+            for entry in sorted(directory.iterdir(), key=lambda path: path.name.lower()):
+                if entry.is_file():
+                    files.append(entry)
+        except PermissionError:
+            return []
+        return files
+
+    def _show_bulk_attachment_picker(self, directory: Path) -> None:
+        """Populate and show the bulk attachment picker for a directory."""
+        files = self._list_bulk_attachable_files(directory)
+        if not files:
+            self.notify(f"No files found in {directory}", severity="warning")
+            self._file_path_mode = None
+            self.query_one("#body-input", ComposeTextArea).focus()
+            return
+
+        self._bulk_picker_directory = directory
+        self._file_path_mode = None
+
+        picker = self.query_one("#bulk-attachment-picker", Vertical)
+        list_view = self.query_one("#bulk-attachment-list", BulkAttachmentList)
+        list_view.clear()
+        for path in files:
+            list_view.append(BulkAttachmentItem(path))
+
+        picker.remove_class("hidden")
+        self._update_bulk_picker_title()
+        list_view.index = 0
+        list_view.focus()
+
+    def _hide_bulk_attachment_picker(self) -> None:
+        """Hide the bulk attachment picker."""
+        self.query_one("#bulk-attachment-picker", Vertical).add_class("hidden")
+        self._bulk_picker_directory = None
+
+    def _get_selected_bulk_attachment_paths(self) -> List[Path]:
+        """Return the currently selected paths in the bulk picker."""
+        list_view = self.query_one("#bulk-attachment-list", BulkAttachmentList)
+        return [
+            item.path
+            for item in list_view.children
+            if isinstance(item, BulkAttachmentItem) and item.selected
+        ]
+
+    def _update_bulk_picker_title(self) -> None:
+        """Refresh the picker title and key hints."""
+        title = self.query_one("#bulk-attachment-picker-title", Label)
+        count = len(self._get_selected_bulk_attachment_paths())
+        directory = self._bulk_picker_directory or self._last_attachment_dir
+        title.update(
+            "Select files from "
+            f"{directory} | Space=toggle Enter=attach Esc=cancel Ctrl+A=toggle all | "
+            f"{count} selected"
+        )
