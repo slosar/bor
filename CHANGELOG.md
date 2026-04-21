@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-dev]
+
+### Added
+- `Ctrl+L Z` in compose now supports bulk attachment selection. After choosing a directory, Bor opens a keyboard-friendly picker where `Space` toggles files, `Enter` attaches the selected set, `Esc` cancels, and `Ctrl+A` toggles all files.
+
+### Fixed
+- `Ctrl+K` now behaves more like emacs in editable fields across the app: it still kills from the cursor to the end of the current input line, and now also copies the killed text to the system clipboard for later paste/yank.
+- The shared file-path prompt used by compose now has bash-like tab completion behavior: a single match completes immediately, multiple matches are shown without forcing one choice, and the input expands only to the longest shared prefix.
+- Fixed a brittle `BorApp` type assertion in tab widgets that could fail in some runtime and test contexts even when the app instance was valid.
+
 ## [0.5.0]
 
 ### Added
@@ -15,7 +25,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added compose editor shortcuts: `Ctrl+T` now transposes characters around the cursor, and `Ctrl+Backspace` performs backward word deletion matching `Ctrl+W` behavior.
 
 ### Fixed
-- `Ctrl+K` now behaves more like emacs in editable fields across the app: it still kills from the cursor to the end of the current input line, and now also copies the killed text to the system clipboard for later paste/yank.
 - Fixed `MarkupError` crash when opening HTML emails whose converted plain text contains URLs with special characters (`"`, `]`, or trailing `)` from Markdown-style links). The URL is now sanitised before embedding it in a Rich `[link="…"]` markup tag, and a fallback renders the body without link markup if any error still occurs.
 - Kitty inline image previews in the attachments tab now display at the image's natural pixel size instead of being stretched to fill the available terminal width. If the image is larger than the available preview area, it is scaled down to fit while preserving the aspect ratio. Cell pixel dimensions are queried via `TIOCGWINSZ`; a rough 2 px/cell fallback is used when the query fails.
 - Fixed N/P (next/previous message) navigation breaking after opening attachments (Z) and returning (Q). The new `MessageViewWidget` received the fully-parsed message from `mu.view()` as its reference, whose `Message-ID` header retains angle brackets (`<foo@bar.com>`), while messages in the search index from `mu.find()` store msgids without them. The lookup always missed, so N/P silently did nothing. Fixed by stripping angle brackets in `mu.view()` when storing `msgid`, and normalising both sides of the comparison in the navigation actions.

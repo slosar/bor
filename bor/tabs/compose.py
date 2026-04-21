@@ -642,8 +642,6 @@ class FilePathInput(Input):
         """Initialize file path input."""
         super().__init__(*args, **kwargs)
         self._completions: List[str] = []
-        self._completion_index: int = 0
-        self._last_prefix: str = ""
 
     def _get_completions(self, path_str: str) -> List[str]:
         """
@@ -687,6 +685,20 @@ class FilePathInput(Input):
         
         return completions
 
+    @staticmethod
+    def _longest_shared_completion_prefix(path_str: str, completions: List[str]) -> str:
+        """Return the farthest bash-style completion prefix we can safely insert."""
+        if not completions:
+            return path_str
+
+        if len(completions) == 1:
+            return completions[0]
+
+        shared_prefix = os.path.commonprefix(completions)
+        if shared_prefix.startswith(path_str):
+            return shared_prefix
+        return path_str
+
     def on_key(self, event: events.Key) -> None:
         """Handle key events for completion."""
         if event.key == "ctrl+k":
@@ -698,29 +710,19 @@ class FilePathInput(Input):
             event.stop()
         elif event.key == "tab":
             current_value = self.value
-            
-            # Check if we're cycling through existing completions
-            if current_value == self._last_prefix or (self._completions and current_value in self._completions):
-                if self._completions:
-                    self._completion_index = (self._completion_index + 1) % len(self._completions)
-                    self.value = self._completions[self._completion_index]
-            else:
-                # Get new completions
-                self._completions = self._get_completions(current_value)
-                self._completion_index = 0
-                self._last_prefix = current_value
-                
-                if self._completions:
-                    self.value = self._completions[0]
-            
+            self._completions = self._get_completions(current_value)
+
+            if self._completions:
+                self.value = self._longest_shared_completion_prefix(
+                    current_value, self._completions
+                )
+
             # Move cursor to end of line
             self.cursor_position = len(self.value)
-            
+
             # Post message to update completions display
-            self.post_message(FilePathInput.CompletionsChanged(
-                self._completions, self._completion_index
-            ))
-            
+            self.post_message(FilePathInput.CompletionsChanged(self._completions, -1))
+
             event.prevent_default()
             event.stop()
         elif event.key == "escape":
@@ -736,8 +738,6 @@ class FilePathInput(Input):
         else:
             # Reset completions when typing
             self._completions = []
-            self._completion_index = 0
-            self._last_prefix = ""
             # Clear completions display
             self.post_message(FilePathInput.CompletionsChanged([], 0))
 

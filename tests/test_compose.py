@@ -4,7 +4,7 @@ import pytest
 
 from bor.editing import kill_input_line, kill_text_line
 from bor.mu import EmailMessage, EmailAddress
-from bor.tabs.compose import ComposeWidget, AddressInput, ComposeTextArea
+from bor.tabs.compose import ComposeWidget, AddressInput, ComposeTextArea, FilePathInput
 import email.utils
 
 
@@ -388,3 +388,30 @@ def test_kill_text_line_kills_newline_at_end_of_line() -> None:
     assert text == "alphabeta"
     assert cursor == 5
     assert killed == "\n"
+
+
+def test_file_path_completion_returns_single_match() -> None:
+    """Tab should complete immediately when there is exactly one match."""
+    completed = FilePathInput._longest_shared_completion_prefix(
+        "/tmp/al",
+        ["/tmp/alpha.txt"],
+    )
+    assert completed == "/tmp/alpha.txt"
+
+
+def test_file_path_completion_extends_to_shared_prefix() -> None:
+    """Tab should extend only to the shared prefix across multiple matches."""
+    completed = FilePathInput._longest_shared_completion_prefix(
+        "/tmp/al",
+        ["/tmp/alpha.txt", "/tmp/alpine.txt"],
+    )
+    assert completed == "/tmp/alp"
+
+
+def test_file_path_completion_keeps_input_when_matches_diverge() -> None:
+    """Tab should leave the input unchanged when matches share no extra prefix."""
+    completed = FilePathInput._longest_shared_completion_prefix(
+        "/tmp/a",
+        ["/tmp/alpha.txt", "/tmp/archive.txt"],
+    )
+    assert completed == "/tmp/a"
