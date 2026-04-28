@@ -224,10 +224,12 @@ class ReplyBar(Static):
         """Initialize reply bar."""
         super().__init__(*args, **kwargs)
         self._callback: Optional[Callable] = None
+        self._cancel_callback: Optional[Callable[[], None]] = None
 
-    def ask(self, callback: Callable) -> None:
+    def ask(self, callback: Callable, cancel_callback: Optional[Callable[[], None]] = None) -> None:
         """Show reply options prompt."""
         self._callback = callback
+        self._cancel_callback = cancel_callback
         self.update("Reply to: (a)ll or (s)ender only?")
         self.add_class("visible")
         self.focus()
@@ -235,17 +237,22 @@ class ReplyBar(Static):
     def on_key(self, event: events.Key) -> None:
         """Handle key events."""
         key = event.key.lower() if event.key else ""
-        
+
         if key in ("a", "s"):
             self.remove_class("visible")
             if self._callback:
                 self._callback(key == "a")  # True for reply all, False for sender only
-            event.prevent_default()
-            event.stop()
+            self._callback = None
+            self._cancel_callback = None
         elif key == "escape":
             self.remove_class("visible")
-            event.prevent_default()
-            event.stop()
+            if self._cancel_callback:
+                self._cancel_callback()
+            self._callback = None
+            self._cancel_callback = None
+
+        event.prevent_default()
+        event.stop()
 
     can_focus = True
 
@@ -734,7 +741,7 @@ class MessageIndexWidget(BaseTab):
             if full_msg and (full_msg.cc_addrs or len(full_msg.to_addrs) > 1):
                 reply_bar = self.query_one("#reply-bar", ReplyBar)
                 self._pending_reply_msg = full_msg
-                reply_bar.ask(self._do_reply)
+                reply_bar.ask(self._do_reply, self._cancel_reply)
             else:
                 self.bor_app.open_compose(reply_to=full_msg or msg)
 
@@ -744,6 +751,10 @@ class MessageIndexWidget(BaseTab):
         if msg:
             self.bor_app.open_compose(reply_to=msg, reply_all=reply_all)
             self._pending_reply_msg = None
+
+    def _cancel_reply(self) -> None:
+        """Clear any pending reply state after dismissing the reply prompt."""
+        self._pending_reply_msg = None
 
     def action_forward(self) -> None:
         """Forward the selected message."""

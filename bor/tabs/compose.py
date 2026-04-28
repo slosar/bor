@@ -453,6 +453,7 @@ class ComposeTextArea(CtrlLMixin, TextArea):
         super().__init__(*args, **kwargs)
         self._aliases: dict = {}
         self._ctrl_l_pressed: bool = False
+        self._append_next_kill: bool = False
 
     def set_aliases(self, aliases: dict) -> None:
         """
@@ -533,12 +534,16 @@ class ComposeTextArea(CtrlLMixin, TextArea):
         row, col = self.cursor_location
         cursor_index = self._cursor_to_index(self.text, row, col)
         new_text, new_index, killed_text = kill_text_line(self.text, cursor_index)
-        copy_to_clipboard(killed_text)
+        copy_to_clipboard(killed_text, append=self._append_next_kill)
+        self._append_next_kill = bool(killed_text)
         self.text = new_text
         self.cursor_location = self._index_to_cursor(new_text, new_index)
 
     def _on_key(self, event: events.Key) -> None:
         """Handle key events for text completion and commands."""
+        if event.key != "ctrl+k":
+            self._append_next_kill = False
+
         # Handle clipboard operations - must prevent default to avoid SIGINT
         if event.key == "ctrl+c":
             if HAS_PYPERCLIP:

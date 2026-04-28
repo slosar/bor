@@ -10,6 +10,7 @@ from datetime import datetime
 
 from textual.widgets import DataTable, Static
 from bor.tabs.compose import ComposeWidget, FilePathInput, BulkAttachmentList
+from bor.tabs.message_index import ReplyBar
 
 # Mock EmailMessage for testing
 class MockEmailMessage:
@@ -186,6 +187,46 @@ class TestMessageIndexNavigation:
                     await pilot.pause()
                     await pilot.press("p")
                     # Should not crash
+
+    @pytest.mark.asyncio
+    async def test_reply_prompt_ignores_other_keys_until_confirmed_or_canceled(
+        self, mock_mu_interface, mock_config
+    ):
+        """Reply prompt should trap unrelated keys and allow escape to cancel."""
+        multi_recipient_msg = MockEmailMessage(
+            subject="Viewed Message",
+            to_addrs=[
+                MagicMock(email="one@test.com", __str__=lambda s: "one@test.com"),
+                MagicMock(email="two@test.com", __str__=lambda s: "two@test.com"),
+            ],
+            cc_addrs=[],
+        )
+        mock_mu_interface.view.return_value = multi_recipient_msg
+
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                app.open_compose = MagicMock()
+
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("r")
+                    await pilot.pause()
+
+                    reply_bar = app.query_one("#reply-bar", ReplyBar)
+                    assert reply_bar.has_class("visible")
+
+                    await pilot.press("x")
+                    await pilot.pause()
+                    assert reply_bar.has_class("visible")
+                    app.open_compose.assert_not_called()
+
+                    await pilot.press("escape")
+                    await pilot.pause()
+                    assert not reply_bar.has_class("visible")
+                    app.open_compose.assert_not_called()
 
 
 class TestMessageView:
