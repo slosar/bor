@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Ctrl+L Z` in compose now supports bulk attachment selection. After choosing a directory, Bor opens a keyboard-friendly picker where `Space` toggles files, `Enter` attaches the selected set, `Esc` cancels, and `Ctrl+A` toggles all files.
 
 ### Fixed
+- Fixed a message-view `MarkupError` crash when opening messages whose plain-text body contains a bracketed URL such as `[https://...]`; Bor now keeps the visible bracket while generating valid Textual link markup.
 - `Ctrl+K` now behaves more like emacs in editable fields across the app: it still kills from the cursor to the end of the current input line, and now also copies the killed text to the system clipboard for later paste/yank.
 - The shared file-path prompt used by compose now has bash-like tab completion behavior: a single match completes immediately, multiple matches are shown without forcing one choice, and the input expands only to the longest shared prefix.
 - Fixed a brittle `BorApp` type assertion in tab widgets that could fail in some runtime and test contexts even when the app instance was valid.

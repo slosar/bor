@@ -37,12 +37,21 @@ def _make_body_markup(content: str) -> str:
     result = []
     for i, part in enumerate(parts):
         if i % 2 == 1:  # URL
+            prefix = ""
+            if result and result[-1].endswith(r"\["):
+                result[-1] = result[-1][:-2]
+                prefix = r"\["
+            elif result and result[-1].endswith("["):
+                result[-1] = result[-1][:-1]
+                prefix = r"\["
             # Strip common trailing punctuation plus chars that close Markdown/HTML constructs
             url = part.rstrip('.,;:!?)]>')
             trailing = part[len(url):]
             # Escape chars that would break Rich's [link="url"] attribute syntax
             safe_url = url.replace('"', '%22').replace(']', '%5D')
-            result.append(f'[link="{safe_url}"]{rich_escape(url)}[/link]{rich_escape(trailing)}')
+            result.append(
+                f'[link="{safe_url}"]{prefix}{rich_escape(url)}[/link]{rich_escape(trailing)}'
+            )
         else:
             result.append(rich_escape(part))
     return "".join(result)
