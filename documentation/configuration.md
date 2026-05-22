@@ -184,6 +184,9 @@ save_directory = "~/Downloads"
 
 # Use kitty icat for image preview (requires kitty terminal)
 use_kitty_icat = true
+
+# Force kitty graphics support even when TERM is not xterm-kitty
+force_kitty_support = false
 ```
 
 ### [aliases]

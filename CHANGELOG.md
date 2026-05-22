@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `Ctrl+L Z` in compose now supports bulk attachment selection. After choosing a directory, Bor opens a keyboard-friendly picker where `Space` toggles files, `Enter` attaches the selected set, `Esc` cancels, and `Ctrl+A` toggles all files.
+- Added `attachments.force_kitty_support` to force Kitty graphics support even when `TERM` is not `xterm-kitty`.
 
 ### Fixed
 - Fixed message viewer freezing with 100% CPU on messages containing a zero-width character (e.g. U+200B) at the start of an overlong unbreakable "word" such as a 300+ char URL. Root cause was an infinite loop in `rich.cells.split_graphemes` in Rich ≤14.3.2; bumped the minimum required versions to `textual>=8.2.7` and `rich>=15.0.0`, which include the fix.
