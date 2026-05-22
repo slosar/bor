@@ -863,7 +863,6 @@ class ComposeWidget(BaseTab):
     BINDINGS = [
         Binding("ctrl+s", "search", "Search", show=False),
         Binding("ctrl+i", "insert_file", "Insert File"),
-        Binding("ctrl+a", "attach_file", "Attach File"),
     ]
 
     DEFAULT_CSS = """

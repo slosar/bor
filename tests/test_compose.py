@@ -36,6 +36,14 @@ def test_compose_references_deduplicates_ids() -> None:
     assert references == "<parent@id> <root@id>"
 
 
+def test_compose_widget_does_not_bind_ctrl_a_to_attach() -> None:
+    """Ctrl+A is reserved for focused text inputs; attachment uses Ctrl+L A."""
+    binding_keys = {binding.key for binding in ComposeWidget.BINDINGS}
+
+    assert "ctrl+a" not in binding_keys
+    assert "ctrl+i" in binding_keys
+
+
 def test_smtp_address_extraction_with_commas() -> None:
     """Test that addresses with commas in display names are extracted correctly for SMTP."""
     # Simulate what would be in the To/CC/BCC headers after formatting
