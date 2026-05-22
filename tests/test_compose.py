@@ -2,8 +2,10 @@ from pathlib import Path
 
 import pytest
 
+import bor.tabs.compose as compose_module
+from bor.editing import kill_input_line, kill_text_line
 from bor.mu import EmailMessage, EmailAddress
-from bor.tabs.compose import ComposeWidget, AddressInput, ComposeTextArea
+from bor.tabs.compose import ComposeWidget, AddressInput, ComposeTextArea, FilePathInput
 import email.utils
 
 
@@ -32,6 +34,14 @@ def test_compose_references_deduplicates_ids() -> None:
     references = ComposeWidget._compose_references(parent)
 
     assert references == "<parent@id> <root@id>"
+
+
+def test_compose_widget_does_not_bind_ctrl_a_to_attach() -> None:
+    """Ctrl+A is reserved for focused text inputs; attachment uses Ctrl+L A."""
+    binding_keys = {binding.key for binding in ComposeWidget.BINDINGS}
+
+    assert "ctrl+a" not in binding_keys
+    assert "ctrl+i" in binding_keys
 
 
 def test_smtp_address_extraction_with_commas() -> None:
@@ -316,6 +326,17 @@ def test_read_insert_file_rejects_non_utf8(tmp_path: Path) -> None:
         ComposeWidget._read_insert_file(source)
 
 
+def test_list_bulk_attachable_files_returns_sorted_files_only(tmp_path: Path) -> None:
+    """Bulk attach helper should list direct child files, sorted by name."""
+    (tmp_path / "z-last.txt").write_text("z", encoding="utf-8")
+    (tmp_path / "A-first.txt").write_text("a", encoding="utf-8")
+    (tmp_path / "subdir").mkdir()
+
+    files = ComposeWidget._list_bulk_attachable_files(tmp_path)
+
+    assert [path.name for path in files] == ["A-first.txt", "z-last.txt"]
+
+
 def test_delete_previous_word_removes_word_and_whitespace() -> None:
     """Backward delete should remove previous word and separator spacing."""
     source = "hello   world"
@@ -352,3 +373,87 @@ def test_transpose_does_not_cross_newline() -> None:
     text, index = ComposeTextArea._transpose_at_cursor(source, 2)
     assert text == source
     assert index == 2
+
+
+def test_kill_input_line_returns_killed_suffix() -> None:
+    """Ctrl+K on single-line inputs should kill to end and return copied text."""
+    text, cursor, killed = kill_input_line("hello world", 6)
+    assert text == "hello "
+    assert cursor == 6
+    assert killed == "world"
+
+
+def test_kill_text_line_kills_to_end_of_current_line() -> None:
+    """Ctrl+K in editor text should kill only the remainder of the current line."""
+    text, cursor, killed = kill_text_line("alpha\nbeta\ngamma", 7)
+    assert text == "alpha\nb\ngamma"
+    assert cursor == 7
+    assert killed == "eta"
+
+
+def test_kill_text_line_kills_newline_at_end_of_line() -> None:
+    """Ctrl+K at end of line should remove the newline, matching emacs behavior."""
+    text, cursor, killed = kill_text_line("alpha\nbeta", 5)
+    assert text == "alphabeta"
+    assert cursor == 5
+    assert killed == "\n"
+
+
+def test_kill_text_line_kills_trailing_empty_line() -> None:
+    """Ctrl+K on a final empty line should delete that line's newline."""
+    text, cursor, killed = kill_text_line("alpha\n", 6)
+    assert text == "alpha"
+    assert cursor == 5
+    assert killed == "\n"
+
+
+def test_compose_kill_line_appends_consecutive_kills_to_clipboard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Consecutive editor kills should accumulate in clipboard order."""
+    clipboard = ""
+
+    def fake_copy(text: str, append: bool = False) -> None:
+        nonlocal clipboard
+        clipboard = clipboard + text if append else text
+
+    monkeypatch.setattr(compose_module, "copy_to_clipboard", fake_copy)
+
+    editor = ComposeTextArea()
+    editor.text = "alpha\nbeta\n"
+    editor.cursor_location = (0, 0)
+
+    editor._kill_line_at_cursor()
+    editor._kill_line_at_cursor()
+    editor._kill_line_at_cursor()
+    editor._kill_line_at_cursor()
+
+    assert clipboard == "alpha\nbeta\n"
+    assert editor.text == ""
+
+
+def test_file_path_completion_returns_single_match() -> None:
+    """Tab should complete immediately when there is exactly one match."""
+    completed = FilePathInput._longest_shared_completion_prefix(
+        "/tmp/al",
+        ["/tmp/alpha.txt"],
+    )
+    assert completed == "/tmp/alpha.txt"
+
+
+def test_file_path_completion_extends_to_shared_prefix() -> None:
+    """Tab should extend only to the shared prefix across multiple matches."""
+    completed = FilePathInput._longest_shared_completion_prefix(
+        "/tmp/al",
+        ["/tmp/alpha.txt", "/tmp/alpine.txt"],
+    )
+    assert completed == "/tmp/alp"
+
+
+def test_file_path_completion_keeps_input_when_matches_diverge() -> None:
+    """Tab should leave the input unchanged when matches share no extra prefix."""
+    completed = FilePathInput._longest_shared_completion_prefix(
+        "/tmp/a",
+        ["/tmp/alpha.txt", "/tmp/archive.txt"],
+    )
+    assert completed == "/tmp/a"

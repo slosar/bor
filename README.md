@@ -179,8 +179,16 @@ bor
 | Ctrl+L L | Send message |
 | Ctrl+L D | Save draft |
 | Ctrl+L X | Cancel |
+| Ctrl+L A | Attach file |
+| Ctrl+L Z | Attach many files from a directory |
 | Ctrl+I | Insert file |
-| Ctrl+A | Attach file |
+
+`Ctrl+L A` opens a file-path prompt with bash-like tab completion: one match completes
+immediately, multiple matches are listed without forcing a choice, and the input expands only
+to the longest shared prefix.
+
+`Ctrl+L Z` first prompts for a directory with the same tab-completion behavior, then opens a file picker where
+`Space` marks files, `Enter` attaches the marked set, `Esc` cancels, and `Ctrl+A` toggles all.
 
 ### Attachments
 

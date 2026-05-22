@@ -23,7 +23,7 @@ from textual.widgets import Static, Label, Button, DataTable, ListView, ListItem
 
 from bor.tabs.base import BaseTab
 from bor.mu import EmailMessage
-from bor.config import get_config
+from bor.config import Config, get_config
 
 
 class AttachmentItem(ListItem):
@@ -105,6 +105,13 @@ def _kitty_image_size_params(img_w: int, img_h: int, avail_cols: int, avail_rows
     if needed_rows <= avail_rows:
         return f",c={avail_cols}"
     return f",r={avail_rows}"
+
+
+def _supports_kitty_graphics(config: Optional[Config] = None) -> bool:
+    """Return whether Kitty graphics support should be used."""
+    if config is None:
+        config = get_config()
+    return config.attachments.force_kitty_support or os.environ.get("TERM") == "xterm-kitty"
 
 
 class AttachmentPreview(ScrollableContainer):
@@ -198,8 +205,7 @@ class AttachmentPreview(ScrollableContainer):
         if not self._current_image_path or not self._current_image_path.exists():
             return
         
-        # Check if we're in kitty
-        if os.environ.get("TERM") != "xterm-kitty":
+        if not _supports_kitty_graphics():
             return
         
         try:
@@ -312,7 +318,7 @@ class AttachmentPreview(ScrollableContainer):
     def clear_image(self) -> None:
         """Clear any displayed Kitty image."""
         self._current_image_path = None
-        if os.environ.get("TERM") == "xterm-kitty":
+        if _supports_kitty_graphics():
             try:
                 # Clear all images using Kitty graphics protocol
                 # a=d means delete, d=A means all images
@@ -524,7 +530,7 @@ class AttachmentsWidget(BaseTab):
 
     def _check_kitty(self) -> bool:
         """Check if we're running in kitty terminal."""
-        return os.environ.get("TERM") == "xterm-kitty"
+        return _supports_kitty_graphics()
 
     def _open_with_kitty_icat(self, index: int) -> None:
         """

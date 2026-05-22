@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0]
+
+### Added
+- `Ctrl+L Z` in compose now supports bulk attachment selection. After choosing a directory, Bor opens a keyboard-friendly picker where `Space` toggles files, `Enter` attaches the selected set, `Esc` cancels, and `Ctrl+A` toggles all files.
+- Added `attachments.force_kitty_support` to force Kitty graphics support even when `TERM` is not `xterm-kitty`.
+
+### Fixed
+- Fixed message viewer freezing with 100% CPU on messages containing a zero-width character (e.g. U+200B) at the start of an overlong unbreakable "word" such as a 300+ char URL. Root cause was an infinite loop in `rich.cells.split_graphemes` in Rich ≤14.3.2; bumped the minimum required versions to `textual>=8.2.7` and `rich>=15.0.0`, which include the fix.
+- Removed an unused `mu view --format=sexp` subprocess call from `MuInterface.view()` that ran on every message open with a 60-second timeout; the result was never read (the email file is parsed directly with Python's `email` module).
+- Eliminated a whole class of `MarkupError` crashes in the message viewer (e.g. on messages with `View [ https://... ]`-style links or `[bracketed]` text in the subject). The message body and header rendering no longer concatenate user content into Rich/Textual markup strings; instead they build a `rich.text.Text` programmatically with `.append()`, so user-supplied content can never be re-parsed as markup. Clickable URL links are preserved via styled spans rather than `[link="..."]` tags.
+- Fixed a message-view `MarkupError` crash when opening messages whose plain-text body contains a bracketed URL such as `[https://...]`; Bor now keeps the visible bracket while generating valid Textual link markup.
+- `Ctrl+K` now behaves more like emacs in editable fields across the app: it still kills from the cursor to the end of the current input line, and now also copies the killed text to the system clipboard for later paste/yank.
+- The shared file-path prompt used by compose now has bash-like tab completion behavior: a single match completes immediately, multiple matches are shown without forcing one choice, and the input expands only to the longest shared prefix.
+- Fixed a brittle `BorApp` type assertion in tab widgets that could fail in some runtime and test contexts even when the app instance was valid.
+
 ## [0.5.0]
 
 ### Added

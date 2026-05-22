@@ -9,6 +9,8 @@ from unittest.mock import MagicMock, patch, AsyncMock
 from datetime import datetime
 
 from textual.widgets import DataTable, Static
+from bor.tabs.compose import ComposeWidget, FilePathInput, BulkAttachmentList
+from bor.tabs.message_index import ReplyBar
 
 # Mock EmailMessage for testing
 class MockEmailMessage:
@@ -185,6 +187,46 @@ class TestMessageIndexNavigation:
                     await pilot.pause()
                     await pilot.press("p")
                     # Should not crash
+
+    @pytest.mark.asyncio
+    async def test_reply_prompt_ignores_other_keys_until_confirmed_or_canceled(
+        self, mock_mu_interface, mock_config
+    ):
+        """Reply prompt should trap unrelated keys and allow escape to cancel."""
+        multi_recipient_msg = MockEmailMessage(
+            subject="Viewed Message",
+            to_addrs=[
+                MagicMock(email="one@test.com", __str__=lambda s: "one@test.com"),
+                MagicMock(email="two@test.com", __str__=lambda s: "two@test.com"),
+            ],
+            cc_addrs=[],
+        )
+        mock_mu_interface.view.return_value = multi_recipient_msg
+
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                app.open_compose = MagicMock()
+
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("r")
+                    await pilot.pause()
+
+                    reply_bar = app.query_one("#reply-bar", ReplyBar)
+                    assert reply_bar.has_class("visible")
+
+                    await pilot.press("x")
+                    await pilot.pause()
+                    assert reply_bar.has_class("visible")
+                    app.open_compose.assert_not_called()
+
+                    await pilot.press("escape")
+                    await pilot.pause()
+                    assert not reply_bar.has_class("visible")
+                    app.open_compose.assert_not_called()
 
 
 class TestMessageView:
@@ -432,6 +474,52 @@ class TestIndexRefreshOnReturn:
                     await pilot.pause()
 
                     assert mock_mu_interface.find.call_count > initial_find_calls
+
+
+class TestComposeBulkAttachments:
+    """Test bulk attachment flow in compose."""
+
+    @pytest.mark.asyncio
+    async def test_ctrl_l_ctrl_z_attaches_marked_files(
+        self, mock_mu_interface, mock_config, tmp_path
+    ):
+        """Ctrl+L Ctrl+Z should open a directory picker and attach marked files."""
+        first = tmp_path / "alpha.txt"
+        second = tmp_path / "beta.txt"
+        ignored = tmp_path / "subdir"
+        first.write_text("alpha", encoding="utf-8")
+        second.write_text("beta", encoding="utf-8")
+        ignored.mkdir()
+
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("c")
+                    await pilot.pause()
+
+                    await pilot.press("ctrl+l", "z")
+                    await pilot.pause()
+
+                    path_input = app.query_one("#attachment-path-input", FilePathInput)
+                    assert path_input.has_focus
+                    path_input.value = str(tmp_path) + "/"
+                    path_input.cursor_position = len(path_input.value)
+
+                    await pilot.press("enter")
+                    await pilot.pause()
+
+                    widget = app.query_one(ComposeWidget)
+                    picker = app.query_one("#bulk-attachment-list", BulkAttachmentList)
+                    assert picker.has_focus
+
+                    await pilot.press("space", "down", "space", "enter")
+                    await pilot.pause()
+
+                    assert [path.name for path in widget.attachments] == ["alpha.txt", "beta.txt"]
 
 
 class TestQuit:

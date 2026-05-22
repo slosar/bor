@@ -22,6 +22,7 @@ def test_default_config():
     assert config.general.theme == "textual-dark"
     assert config.folders.inbox == "/INBOX"
     assert config.smtp.port == 587
+    assert config.attachments.force_kitty_support is False
 
 
 def test_config_from_dict():
@@ -34,12 +35,16 @@ def test_config_from_dict():
         "folders": {
             "inbox": "/Mail/Inbox",
         },
+        "attachments": {
+            "force_kitty_support": True,
+        },
     }
 
     config = Config.from_dict(data)
     assert config.general.max_messages == 200
     assert config.general.date_format == "%d/%m/%Y"
     assert config.folders.inbox == "/Mail/Inbox"
+    assert config.attachments.force_kitty_support is True
     # Default values should be preserved
     assert config.folders.archive == "/Archive"
 
@@ -66,6 +71,9 @@ archive = "/MyArchive"
 server = "mail.example.com"
 port = 465
 
+[attachments]
+force_kitty_support = true
+
 [aliases]
 t = "Thanks!"
 """
@@ -81,6 +89,7 @@ t = "Thanks!"
         assert config.folders.inbox == "/MyInbox"
         assert config.smtp.server == "mail.example.com"
         assert config.smtp.port == 465
+        assert config.attachments.force_kitty_support is True
         assert config.aliases.get("t") == "Thanks!"
 
 

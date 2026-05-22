@@ -568,9 +568,6 @@ class MuInterface:
         if not Path(path).exists():
             return None
 
-        # Use mu view for metadata
-        result = self._run_mu(["view", path, "--format=sexp"])
-
         # Parse the email file directly for full content
         try:
             with open(path, "rb") as f:

@@ -14,7 +14,7 @@ import webbrowser
 from pathlib import Path
 from typing import Callable, Optional
 
-from rich.markup import escape as rich_escape
+from rich.text import Text
 
 from textual import events
 from textual.app import ComposeResult
@@ -31,21 +31,35 @@ from bor.config import get_config
 _URL_RE = re.compile(r'(https?://\S+)')
 
 
-def _make_body_markup(content: str) -> str:
-    """Escape Rich markup in plain-text body and wrap URLs in clickable link tags."""
+def _make_body_text(content: str) -> Text:
+    """Build a Rich Text for the message body with clickable URL spans.
+
+    The Text is constructed programmatically via `.append()` so user content
+    is never parsed as Rich/Textual markup. This avoids markup-injection
+    crashes on messages containing characters the parser treats specially
+    (stray `[`, `[/...]` look-alikes, quotes inside URLs, etc.).
+    """
+    text = Text()
     parts = _URL_RE.split(content)
-    result = []
     for i, part in enumerate(parts):
+        if not part:
+            continue
         if i % 2 == 1:  # URL
-            # Strip common trailing punctuation plus chars that close Markdown/HTML constructs
             url = part.rstrip('.,;:!?)]>')
             trailing = part[len(url):]
-            # Escape chars that would break Rich's [link="url"] attribute syntax
-            safe_url = url.replace('"', '%22').replace(']', '%5D')
-            result.append(f'[link="{safe_url}"]{rich_escape(url)}[/link]{rich_escape(trailing)}')
+            # If the prior chunk ends with `[` (style: `[https://...]`), pull
+            # the bracket into the link span so it's part of the clickable
+            # affordance, matching the prior behavior.
+            if text.plain.endswith("["):
+                text.right_crop(1)
+                text.append("[" + url, style=f"link {url}")
+            else:
+                text.append(url, style=f"link {url}")
+            if trailing:
+                text.append(trailing)
         else:
-            result.append(rich_escape(part))
-    return "".join(result)
+            text.append(part)
+    return text
 
 
 def html_to_text(html: str) -> str:
@@ -134,66 +148,70 @@ class MessageHeader(Static):
         except Exception:
             pass
 
-    def _format_headers(self) -> str:
-        """Format headers for display."""
-        lines = []
+    def _format_headers(self) -> Text:
+        """Format headers as a Rich Text.
 
-        # From
-        lines.append(f"[bold]From:[/bold]    {rich_escape(str(self.message.from_addr))}")
+        Built programmatically via `.append()` so user-supplied header values
+        (subjects, names, message-ids, etc.) can never be interpreted as
+        markup. Static.update accepts a Text directly.
+        """
+        text = Text()
+        first = True
+
+        def add_row(label: str, value: str) -> None:
+            nonlocal first
+            if not first:
+                text.append("\n")
+            first = False
+            text.append(label, style="bold")
+            text.append(value)
+
+        add_row("From:    ", str(self.message.from_addr))
 
         # Show effective reply address when it differs from From
         if self.message.list_post_addr and self.message.list_post_addr.email:
-            # Mailing list: show the list address (this is where 'r' will send)
             if self.message.list_post_addr.email != self.message.from_addr.email:
-                lines.append(f"[bold]List:[/bold]    {rich_escape(self.message.list_post_addr.email)}")
+                add_row("List:    ", self.message.list_post_addr.email)
         elif (self.message.reply_to_addr and
                 self.message.reply_to_addr.email != self.message.from_addr.email):
-            lines.append(f"[bold]Reply-To:[/bold] {rich_escape(str(self.message.reply_to_addr))}")
+            add_row("Reply-To: ", str(self.message.reply_to_addr))
 
-        # To
-        to_list = rich_escape(", ".join(str(addr) for addr in self.message.to_addrs))
-        lines.append(f"[bold]To:[/bold]      {to_list}")
+        add_row("To:      ", ", ".join(str(addr) for addr in self.message.to_addrs))
 
-        # CC
         if self.message.cc_addrs:
-            cc_list = rich_escape(", ".join(str(addr) for addr in self.message.cc_addrs))
-            lines.append(f"[bold]CC:[/bold]      {cc_list}")
+            add_row("CC:      ", ", ".join(str(addr) for addr in self.message.cc_addrs))
 
-        # BCC (only in full header mode)
         if self.show_full and self.message.bcc_addrs:
-            bcc_list = rich_escape(", ".join(str(addr) for addr in self.message.bcc_addrs))
-            lines.append(f"[bold]BCC:[/bold]     {bcc_list}")
+            add_row("BCC:     ", ", ".join(str(addr) for addr in self.message.bcc_addrs))
 
-        # Date
         date_str = ""
         if self.message.date:
             date_str = self.message.date.strftime("%Y-%m-%d %H:%M:%S %Z")
-        lines.append(f"[bold]Date:[/bold]    {rich_escape(date_str)}")
+        add_row("Date:    ", date_str)
 
-        # Subject
-        lines.append(f"[bold]Subject:[/bold] {rich_escape(self.message.subject)}")
+        add_row("Subject: ", self.message.subject)
 
-        # Attachments count
         if self.message.attachments:
             count = len(self.message.attachments)
-            lines.append(f"[bold]Attach:[/bold]  {count} attachment(s)")
+            add_row("Attach:  ", f"{count} attachment(s)")
 
-        # Full / rich headers
         if self.show_full:
-            lines.append("")  # visual separator
+            # Blank visual separator: finish previous line + one empty line.
+            text.append("\n\n")
+            first = True  # next add_row should not prepend another newline
 
             if self.message.msgid:
-                lines.append(f"[bold]Message-ID:[/bold] {rich_escape(self.message.msgid)}")
+                add_row("Message-ID: ", self.message.msgid)
             if self.message.in_reply_to:
-                lines.append(f"[bold]In-Reply-To:[/bold] {rich_escape(self.message.in_reply_to)}")
+                add_row("In-Reply-To: ", self.message.in_reply_to)
             if self.message.references:
                 n = len(self.message.references)
                 sample = " ".join(self.message.references[-2:])
                 suffix = f" (… {n} total)" if n > 2 else ""
-                lines.append(f"[bold]References:[/bold] {rich_escape(sample)}{suffix}")
+                add_row("References: ", sample + suffix)
 
             if self.message.priority and self.message.priority != "normal":
-                lines.append(f"[bold]Priority:[/bold]   {rich_escape(self.message.priority)}")
+                add_row("Priority:   ", self.message.priority)
 
             if self.message.size:
                 size = self.message.size
@@ -203,24 +221,22 @@ class MessageHeader(Static):
                     size_str = f"{size / 1024:.1f} KB"
                 else:
                     size_str = f"{size} B"
-                lines.append(f"[bold]Size:[/bold]       {size_str}")
+                add_row("Size:       ", size_str)
 
             if self.message.maildir:
-                lines.append(f"[bold]Folder:[/bold]     {rich_escape(self.message.maildir)}")
+                add_row("Folder:     ", self.message.maildir)
 
             if self.message.flags:
-                lines.append(f"[bold]Flags:[/bold]      {rich_escape(', '.join(self.message.flags))}")
+                add_row("Flags:      ", ", ".join(self.message.flags))
 
             if self.message.tags:
-                lines.append(f"[bold]Tags:[/bold]       {rich_escape(', '.join(self.message.tags))}")
+                add_row("Tags:       ", ", ".join(self.message.tags))
 
-            # Extra headers captured from the raw file
             for hdr_name, val in self.message.extra_headers.items():
-                # Truncate very long values (e.g. Authentication-Results)
                 display_val = val if len(val) <= 100 else val[:97] + "…"
-                lines.append(f"[bold]{rich_escape(hdr_name)}:[/bold] {rich_escape(display_val)}")
+                add_row(f"{hdr_name}: ", display_val)
 
-        return "\n".join(lines)
+        return text
 
 
 class MessageBody(ScrollableContainer):
@@ -435,31 +451,24 @@ class MessageViewWidget(BaseTab):
     def _load_message(self) -> None:
         """Load the full message content."""
         mu = self.bor_app.mu
-        # Pass msgid in case the path is stale (e.g., after marking as read)
         self._full_message = mu.view(self._message_ref.path, msgid=self._message_ref.msgid)
 
         if self._full_message:
-            # Update the message reference path in case it changed (e.g., marked as read)
-            # This keeps _current_messages in sync
             if self._full_message.path != self._message_ref.path:
                 self._message_ref.path = self._full_message.path
-            
-            # Update flags - message was marked as read
+
             if "unread" in self._message_ref.flags:
                 self._message_ref.flags.remove("unread")
             if "new" in self._message_ref.flags:
                 self._message_ref.flags.remove("new")
             if "seen" not in self._message_ref.flags:
                 self._message_ref.flags.append("seen")
-            
-            # Track this message index as read for later refresh
+
             self._read_message_indices.add(self.bor_app._current_index)
-            
-            # Update header
+
             header = self.query_one("#msg-header", MessageHeader)
             header.update_message(self._full_message)
 
-            # Update attachment info
             attach_info = self.query_one("#attachment-info", Static)
             if self._full_message.attachments:
                 count = len(self._full_message.attachments)
@@ -468,7 +477,6 @@ class MessageViewWidget(BaseTab):
             else:
                 attach_info.display = False
 
-            # Get body content
             if self._full_message.body_txt:
                 self._content = self._full_message.body_txt
             elif self._full_message.body_html:
@@ -476,19 +484,17 @@ class MessageViewWidget(BaseTab):
             else:
                 self._content = "(No message content)"
 
-            # Update body
             body = self.query_one("#msg-body", Static)
             try:
-                body.update(_make_body_markup(self._content))
+                body.update(_make_body_text(self._content))
             except Exception:
-                body.update(rich_escape(self._content))
+                body.update(Text(self._content))
 
-            # Update tab title
-            title = self._full_message.subject[:20] + "..." if len(self._full_message.subject) > 20 else self._full_message.subject
+            subject = self._full_message.subject
+            title = subject[:20] + "..." if len(subject) > 20 else subject
             self.update_tab_title(title)
         else:
-            body = self.query_one("#msg-body", Static)
-            body.update("Error: Could not load message")
+            self.query_one("#msg-body", Static).update("Error: Could not load message")
 
     # Navigation actions
 

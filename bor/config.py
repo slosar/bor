@@ -113,6 +113,7 @@ class AttachmentsConfig:
     """Attachments handling configuration."""
     save_directory: str = "~/Downloads"
     use_kitty_icat: bool = True
+    force_kitty_support: bool = False
 
 
 @dataclass

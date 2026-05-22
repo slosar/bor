@@ -6,7 +6,7 @@ Provides common functionality for all tab types.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from textual.widget import Widget
 
@@ -30,10 +30,7 @@ class BaseTab(Widget):
     @property
     def bor_app(self) -> "BorApp":
         """Get the Bor application instance."""
-        from bor.app import BorApp
-        app = self.app
-        assert isinstance(app, BorApp)
-        return app
+        return cast("BorApp", self.app)
 
     def close_tab(self) -> None:
         """Close this tab."""
