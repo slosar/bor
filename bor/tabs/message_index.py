@@ -16,7 +16,6 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Vertical, Horizontal
 from textual.message import Message
-from textual.widget import Widget
 from textual.widgets import DataTable, Input, Static, Label
 from textual.coordinate import Coordinate
 
@@ -216,44 +215,26 @@ class ReplyBar(Static):
         """Initialize reply bar."""
         super().__init__(*args, **kwargs)
         self._callback: Optional[Callable] = None
-        self._previous_focus: Optional[Widget] = None
 
     def ask(self, callback: Callable) -> None:
         """Show reply options prompt."""
         self._callback = callback
-        self._previous_focus = self.app.focused
         self.update("Reply to: (a)ll or (s)ender only?")
         self.add_class("visible")
         self.focus()
 
-    def _restore_focus(self) -> None:
-        """Return focus to the widget that opened the reply prompt."""
-        try:
-            if self._previous_focus is not None and self._previous_focus is not self:
-                self._previous_focus.focus()
-                return
-        except Exception:
-            pass
-
-        try:
-            self.screen.query_one(DataTable).focus()
-        except Exception:
-            pass
-
     def on_key(self, event: events.Key) -> None:
         """Handle key events."""
         key = event.key.lower() if event.key else ""
-
+        
         if key in ("a", "s"):
             self.remove_class("visible")
-            self._restore_focus()
             if self._callback:
                 self._callback(key == "a")  # True for reply all, False for sender only
             event.prevent_default()
             event.stop()
         elif key == "escape":
             self.remove_class("visible")
-            self._restore_focus()
             event.prevent_default()
             event.stop()
 
