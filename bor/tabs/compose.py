@@ -720,7 +720,6 @@ class ComposeWidget(BaseTab):
     BINDINGS = [
         Binding("ctrl+s", "search", "Search", show=False),
         Binding("ctrl+i", "insert_file", "Insert File"),
-        Binding("ctrl+a", "attach_file", "Attach File"),
     ]
 
     DEFAULT_CSS = """
@@ -870,7 +869,7 @@ class ComposeWidget(BaseTab):
                     yield FilePathInput(id="attachment-path-input", classes="attachment-path-input")
 
             with Horizontal(classes="status-bar"):
-                yield Label("Ctrl+L: L=Send D=Draft X=Cancel | T/C/B/S/E=Jump to field | Tab=Next", id="status")
+                yield Label("Ctrl+L: L=Send D=Draft X=Cancel | T/C/B/S/E=Jump A=Attach | Tab=Next", id="status")
 
     def on_mount(self) -> None:
         """Handle widget mount."""

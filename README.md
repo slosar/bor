@@ -180,7 +180,7 @@ bor
 | Ctrl+L D | Save draft |
 | Ctrl+L X | Cancel |
 | Ctrl+I | Insert file |
-| Ctrl+A | Attach file |
+| Ctrl+L A | Attach file |
 
 ### Attachments
 

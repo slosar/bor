@@ -129,7 +129,7 @@ Alt+N switching handled via unicode character detection as in terminal_editor.py
 - Ctrl+L X: Cancel
 - Ctrl+S: Search
 - Ctrl+I: Insert file
-- Ctrl+A: Attach file
+- Ctrl+L A: Attach file
 - Tab: Autocomplete
 
 ## Message Flags Display
