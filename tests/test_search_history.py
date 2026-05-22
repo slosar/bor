@@ -17,7 +17,8 @@ def make_input(history_file: Path):
     inp._history = []
     inp._history_pos = -1
     inp._saved_value = ""
-    inp._load_history()
+    with patch.object(_mi, "_HISTORY_FILE", history_file):
+        inp._load_history()
     return inp
 
 

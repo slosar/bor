@@ -794,7 +794,12 @@ class BulkAttachmentItem(ListItem):
     def _render_label(self) -> str:
         """Return the display string for this item."""
         marker = "[x]" if self.selected else "[ ]"
-        size = self.path.stat().st_size if self.path.exists() else 0
+        size = 0
+        if self.path.exists():
+            try:
+                size = self.path.stat().st_size
+            except OSError:
+                size = 0
         if size < 1024:
             size_text = f"{size} B"
         elif size < 1024 * 1024:
