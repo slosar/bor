@@ -311,21 +311,17 @@ class FlagBar(Static):
         """Handle key events."""
         key = event.key.lower() if event.key else ""
         char = event.character or ""
-        
+
         # Check for shift+key (uppercase) to remove flag
         if char in ("U", "N", "F"):
             self.remove_class("visible")
             if self._callback:
                 # Pass uppercase to indicate removal
                 self._callback(char)
-            event.prevent_default()
-            event.stop()
         elif key in ("u", "n", "f"):
             self.remove_class("visible")
             if self._callback:
                 self._callback(key)
-            event.prevent_default()
-            event.stop()
         elif key == "escape":
             self.remove_class("visible")
             # Return focus to table
@@ -333,8 +329,9 @@ class FlagBar(Static):
                 self.screen.query_one(DataTable).focus()
             except Exception:
                 pass
-            event.prevent_default()
-            event.stop()
+
+        event.prevent_default()
+        event.stop()
 
     can_focus = True
 
