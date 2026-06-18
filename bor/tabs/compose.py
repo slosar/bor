@@ -1911,3 +1911,4 @@ class ComposeWidget(BaseTab):
             f"{directory} | Space=toggle Enter=attach Esc=cancel Ctrl+A=toggle all | "
             f"{count} selected"
         )
+        self.select_on_focus = False

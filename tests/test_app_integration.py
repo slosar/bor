@@ -554,3 +554,33 @@ class TestQuit:
                     await pilot.pause()
                     assert app.is_running
                     assert tabs.active == active_before
+from pathlib import Path
+from textual.widgets._input import Selection
+    @pytest.mark.asyncio
+    async def test_ctrl_l_ctrl_a_keeps_default_path_unselected(
+        self, mock_mu_interface, mock_config
+    ):
+        """Ctrl+L Ctrl+A should leave the default path intact with no active selection."""
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("c")
+                    await pilot.pause()
+
+                    await pilot.press("ctrl+l", "a")
+                    await pilot.pause()
+
+                    path_input = app.query_one("#attachment-path-input", FilePathInput)
+                    expected_value = str(Path.home()) + "/"
+
+                    assert path_input.has_focus
+                    assert path_input.value == expected_value
+                    assert path_input.cursor_position == len(expected_value)
+                    assert path_input.selection == Selection(
+                        len(expected_value), len(expected_value)
+                    )
+

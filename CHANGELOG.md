@@ -56,3 +56,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed marked-message persistence when viewing another message and returning to the index (`m`, `m`, `Enter`, `Q`): previously marked messages now remain marked.
 - Fixed marked-row rendering so message marking inverts the full row width, not only the visible text.
 - Fixed compose header row alignment so `To:`, `CC:`, `BCC:`, and `Subject:` labels are vertically centered with their input fields.
+- Fixed the compose attachment path prompt (`Ctrl+L A`) selecting the entire default directory on focus. The prompt now leaves the prefilled path intact with the cursor at the end, so typing continues from the default location instead of replacing it.
