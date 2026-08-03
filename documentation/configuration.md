@@ -275,3 +275,13 @@ t = "Thanks!"
 [email_aliases]
 work = "colleagues@company.com"
 ```
+
+## Environment Variables
+
+These are diagnostics rather than everyday settings; none of them have a config
+file equivalent.
+
+| Variable | Effect |
+|----------|--------|
+| `BOR_NO_GC_TUNING` | Set to `1` to stop Bor from freezing the startup object graph and raising the garbage-collection thresholds after the inbox loads. The tuning trades a small amount of resident memory for shorter pauses; disable it when investigating memory growth, since the frozen generation is never rescanned. |
+| `BORPROF_LOG` | Path for the UI latency profiler's log (default `/tmp/borprof.jsonl`). See `python -m bor.profiling` in [architecture.md](architecture.md#profiling). |

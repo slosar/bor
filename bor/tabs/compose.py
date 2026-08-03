@@ -6,6 +6,7 @@ Email composition with address autocompletion and attachment handling.
 
 from __future__ import annotations
 
+import asyncio
 import email.utils
 import os
 import re
@@ -27,6 +28,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Vertical, Horizontal
 from textual.widgets import Input, TextArea, Static, Label, ListView, ListItem
+from textual.widgets.text_area import Edit, EditResult, Selection
 from textual.reactive import reactive
 from textual.message import Message
 
@@ -459,12 +461,94 @@ class ComposeTextArea(CtrlLMixin, TextArea):
     Supports text autocompletion with configurable shortcuts.
     """
 
+    # TextArea declares `selection` with the default repaint=True, so every
+    # cursor move repaints the entire widget. On a full-screen editor that is
+    # ~11KB of ANSI per keystroke (versus ~1.8KB for the message index), which
+    # is very visible over SSH. Re-declare the reactive without the blanket
+    # repaint; the overrides below refresh only the lines that actually change.
+    selection: reactive[Selection] = reactive(
+        Selection(), init=False, always_update=True, repaint=False
+    )
+
     def __init__(self, *args, **kwargs) -> None:
         """Initialize compose text area."""
         super().__init__(*args, **kwargs)
         self._aliases: dict = {}
         self._ctrl_l_pressed: bool = False
         self._append_next_kill: bool = False
+
+    # -- targeted repainting -------------------------------------------
+
+    def _watch_selection(self, previous_selection: Selection, selection: Selection) -> None:
+        """Refresh only the lines whose appearance depends on the selection."""
+        # The base watcher refreshes the *new* matching-bracket line but not the
+        # old one, which the blanket repaint used to cover for.
+        previous_bracket = self._matching_bracket_location
+        super()._watch_selection(previous_selection, selection)
+
+        if not self.is_mounted:
+            return
+
+        try:
+            top, bottom = self._selection_line_span(previous_selection)
+            new_top, new_bottom = self._selection_line_span(selection)
+            top = min(top, new_top)
+            bottom = max(bottom, new_bottom)
+            for bracket in (previous_bracket, self._matching_bracket_location):
+                if bracket is not None:
+                    bracket_y = self.wrapped_document.location_to_offset(bracket).y
+                    top = min(top, bracket_y)
+                    bottom = max(bottom, bracket_y)
+        except Exception:
+            # Any mapping failure: fall back to the old whole-widget repaint.
+            self.refresh()
+            return
+
+        self.refresh_lines(top, bottom - top + 1)
+
+    def edit(self, edit: Edit) -> EditResult:
+        """Perform an edit, repainting the rows it touched.
+
+        Line-count changes update `virtual_size`, which repaints on its own; an
+        edit that rewrites text in place does not, and may land outside the
+        selection, so refresh its row range explicitly.
+        """
+        result = super().edit(edit)
+        try:
+            top = min(edit.top[0], result.end_location[0])
+            bottom = max(edit.bottom[0], result.end_location[0])
+            top_y, bottom_y = self._row_span(top, bottom)
+            self.refresh_lines(top_y, bottom_y - top_y + 1)
+        except Exception:
+            self.refresh()
+        return result
+
+    def _selection_line_span(self, selection: Selection) -> tuple[int, int]:
+        """Visual y range (inclusive) covered by a selection."""
+        start, end = selection
+        if start > end:
+            start, end = end, start
+        return self._row_span(start[0], end[0])
+
+    def _row_span(self, top_row: int, bottom_row: int) -> tuple[int, int]:
+        """Map a document row range to an inclusive visual y range.
+
+        Row granularity, not column: the cursor-line highlight spans a whole
+        document row, and with soft wrap that row can occupy several visual
+        lines. Anchoring on the cursor's own wrap segment would leave the other
+        segments of the same row stale.
+        """
+        location_to_offset = self.wrapped_document.location_to_offset
+        line_count = self.document.line_count
+        if not line_count:
+            return 0, 0
+
+        first_row = max(0, min(top_row, line_count - 1))
+        last_row = max(0, min(bottom_row, line_count - 1))
+
+        top_y = location_to_offset((first_row, 0)).y
+        bottom_y = location_to_offset((last_row, len(self.document[last_row]))).y
+        return top_y, bottom_y
 
     def set_aliases(self, aliases: dict) -> None:
         """
@@ -1071,8 +1155,25 @@ class ComposeWidget(BaseTab):
             self.query_one("#to-input", AddressInput).focus()
 
     def _load_contacts(self) -> None:
-        """Load contacts from mu."""
-        self._contacts = self.bor_app.mu.find_contacts(maxnum=500)
+        """Load contacts from mu on a worker thread.
+
+        `mu cfind` takes ~50ms, which would otherwise freeze the UI every time
+        a compose tab opens. Completions are Tab-triggered, so the brief window
+        before the list arrives is harmless.
+        """
+        self.run_worker(self._load_contacts_worker(), name="load-contacts")
+
+    async def _load_contacts_worker(self) -> None:
+        """Fetch contacts and hand them to the address inputs."""
+        contacts = await asyncio.to_thread(self.bor_app.mu.find_contacts, maxnum=500)
+        if not self.is_mounted:
+            return
+        self._contacts = contacts
+        for input_id in ["to-input", "cc-input", "bcc-input"]:
+            try:
+                self.query_one(f"#{input_id}", AddressInput).set_contacts(contacts)
+            except Exception:
+                pass
 
     def _load_aliases(self) -> None:
         """Load email and text aliases."""

@@ -8,6 +8,8 @@ between different views (message index, message view, compose, etc.)
 from __future__ import annotations
 
 import argparse
+import gc
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, TYPE_CHECKING
 
@@ -39,6 +41,50 @@ ALT_DIGIT_MAP = {
     "ª": 9,  # Alt+9
     "º": 0,  # Alt+0 (U+00BA)
 }
+
+
+# Generation 1 and 2 collection thresholds. Absolute values rather than
+# multiples of whatever is currently set, so calling _tune_gc() more than once
+# cannot compound them. CPython's defaults are (700, 10, 10).
+_GC_GEN1_THRESHOLD = 50
+_GC_GEN2_THRESHOLD = 100
+
+_gc_tuned = False
+
+
+def _tune_gc() -> None:
+    """Reduce garbage-collection pauses once startup has settled.
+
+    Textual churns through short-lived render objects, so with the default
+    thresholds a full (generation 2) collection lands every few seconds. Those
+    took 50-97ms on a real mailbox, which is long enough to be felt as a freeze
+    and was the largest remaining source of stalls after mu work moved off the
+    event loop.
+
+    Two changes, both applied after the inbox has loaded so they act on the
+    steady-state object graph:
+
+    * `gc.freeze()` moves everything alive at startup — modules, classes,
+      compiled CSS, the widget tree — into a permanent generation that is never
+      scanned again. This is the bulk of the ~135k tracked objects, and none of
+      it is garbage.
+    * Raising the generation 1 and 2 thresholds makes full collections rarer.
+      Generation 0 is left alone: it already runs in ~0.05ms and keeps the
+      per-collection cost low.
+
+    Set BOR_NO_GC_TUNING=1 to skip this, e.g. when chasing a memory leak that
+    the frozen generation would hide. The test suite sets it globally, since an
+    app fixture must not leave the interpreter's collector reconfigured.
+    """
+    global _gc_tuned
+    if _gc_tuned or os.environ.get("BOR_NO_GC_TUNING"):
+        return
+    _gc_tuned = True
+    # Collect first so genuinely dead startup objects are not frozen forever.
+    gc.collect()
+    gc.freeze()
+    gen0 = gc.get_threshold()[0]
+    gc.set_threshold(gen0, _GC_GEN1_THRESHOLD, _GC_GEN2_THRESHOLD)
 
 
 class BorTabbedContent(TabbedContent):
@@ -226,6 +272,7 @@ class BorApp(App):
         await widget.search(f'maildir:"{self.config.folders.inbox}"')
         # Focus after loading
         await self._focus_message_index()
+        _tune_gc()
 
     def on_key(self, event: events.Key) -> None:
         """Handle key events for tab switching."""

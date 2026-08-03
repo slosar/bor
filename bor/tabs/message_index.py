@@ -6,6 +6,7 @@ Displays a list of email messages with navigation and actions.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional, Set
@@ -511,11 +512,10 @@ class MessageIndexWidget(BaseTab):
         use_threads = threads if threads is not None else self.threading_enabled
 
         self.current_query = query
-        self.messages = self.bor_app.mu.find(
-            query,
-            maxnum=config.general.max_messages,
-            threads=use_threads,
-            descending=True
+        # `mu find` spawns a subprocess and takes ~40ms on a large index, which
+        # is long enough to be felt as a stall if it runs on the event loop.
+        self.messages = await asyncio.to_thread(
+            self._find_messages, query, use_threads, config.general.max_messages
         )
 
         # Update app's message list
@@ -531,6 +531,16 @@ class MessageIndexWidget(BaseTab):
 
         # Update status
         self._update_status()
+
+    def _find_messages(self, query: str, use_threads: bool, maxnum: int) -> List[EmailMessage]:
+        """Run a mu query. Runs on a worker thread.
+
+        Waits for any queued reindexing first, so a search issued right after
+        an archive/delete/flag change sees the updated database.
+        """
+        mu = self.bor_app.mu
+        mu.wait_for_reindex()
+        return mu.find(query, maxnum=maxnum, threads=use_threads, descending=True)
 
     async def _refresh_table(self) -> None:
         """Refresh the message table with current messages."""

@@ -79,6 +79,17 @@ Key methods:
 - `move()` - Move message between folders
 - `find_contacts()` - Search contacts
 - `extract_attachment()` - Extract attachment to file
+- `queue_reindex()` - Queue a `mu remove`/`mu add` database update for the background worker
+- `wait_for_reindex()` - Block until queued reindexing has drained (worker threads only)
+
+Every method here blocks: `find()` and `find_contacts()` spawn subprocesses,
+`view()` parses the whole MIME message. **None of them may be called from the UI
+thread** — callers use `asyncio.to_thread` or a Textual worker. Flag changes and
+moves rename the file synchronously (cheap, and it is what actually changes
+message state) and defer the mu database update to a background thread, batching
+pending paths into a single `remove` and a single `add`. Anything that queries mu
+afterwards calls `wait_for_reindex()` first, from its worker thread, so results
+reflect pending changes.
 
 ### bor/ical.py
 
@@ -128,7 +139,8 @@ Tab widgets for different views.
 #### compose.py
 - `ComposeWidget` - Email composition
 - `AddressInput` - Address input with autocompletion
-- `ComposeTextArea` - Text area with shortcuts
+- `ComposeTextArea` - Text area with shortcuts, and with targeted repainting
+  (see below)
 
 #### attachments.py
 - `AttachmentsWidget` - Attachment list and preview
@@ -172,15 +184,22 @@ BorApp.open_message(msg)
     ▼
 Create MessageViewWidget
     │
-    ▼
-MuInterface.view(path)
+    ├──▶ Render headers from the index row immediately ("Loading..." body)
     │
     ▼
-Parse email file with email.parser
+Worker thread: MuInterface.view(path)
     │
     ▼
-Display headers and body
+Parse email file with email.parser, convert HTML to text,
+build the body Text, rename the file to drop the unread flag
+    │
+    ▼
+Back on the UI thread: display headers and body
 ```
+
+The parse costs 100-200ms for a typical message, so it runs on a worker thread;
+doing it inline froze the UI on every message open. An `exclusive` worker group
+means holding `n` cancels superseded loads instead of queueing them.
 
 ### Sending Email
 
@@ -233,3 +252,45 @@ Styles are defined inline in widget classes using Textual CSS. Key style classes
 - `.flagged` - Important messages
 - `.marked` - Selected for action
 - `.quoted` - Quoted text in messages
+
+## UI responsiveness
+
+Two rules keep the interface from stalling.
+
+**Nothing blocking on the event loop.** Textual runs the UI on a single asyncio
+loop, so any synchronous subprocess or heavy parse freezes the whole app —
+including keyboard input. `mu` calls and MIME parsing therefore run via
+`asyncio.to_thread` or a Textual worker. This is the single biggest source of
+perceived lag; see the `bor/mu.py` and "Viewing Email" notes above.
+
+**Keep full GC collections rare.** Rendering allocates heavily, so with default
+thresholds a generation 2 collection ran every few seconds and blocked for
+50-97ms. `BorApp._load_inbox` calls `_tune_gc()` once startup has settled: it
+freezes the startup object graph out of future scans and raises the generation 1
+and 2 thresholds, leaving generation 0 alone. `BOR_NO_GC_TUNING=1` disables it;
+the test suite sets that globally via `tests/conftest.py`, since an app fixture
+must not leave the interpreter's collector reconfigured for later tests.
+
+**Repaint only what changed.** Textual has no cell-level diffing: a dirty region
+is re-emitted wholesale as ANSI. A widget that repaints itself entirely on every
+keystroke costs kilobytes per keypress, which is invisible locally but very
+noticeable over SSH. `ComposeTextArea` exists partly for this reason — it
+redeclares `TextArea.selection` with `repaint=False` and refreshes only the
+affected lines, taking typing and cursor movement from ~11.3KB to ~385 bytes per
+keystroke.
+
+### Profiling
+
+`bor/profiling.py` instruments the whole pipeline — frame composition time,
+bytes written per frame, terminal drain time, every `mu` call tagged with
+whether it ran on the UI thread, garbage collection, and event-loop stalls with
+a sampled main-thread stack:
+
+```bash
+python -m bor.profiling            # run bor with instrumentation
+python -m bor.profiling --report   # summarise the run
+```
+
+The log path defaults to `/tmp/borprof.jsonl` and can be set with `$BORPROF_LOG`.
+When chasing a stall, check whether `mu` calls report `MAIN THREAD` and whether
+the stall overlaps a gen2 collection before suspecting the render path.

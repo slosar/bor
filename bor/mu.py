@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from email import policy, utils as email_utils
@@ -281,6 +282,17 @@ class MuInterface:
         self.muhome = muhome
         self._root_maildir: Optional[str] = None
         self._move_history: List[Tuple[str, str]] = []  # For undo
+
+        # Deferred database reindexing. Flag changes rename the file immediately
+        # (cheap) and queue the `mu remove`/`mu add` pair for a background
+        # thread, which batches all pending paths into one invocation each.
+        # Without this, every message you open blocks the UI for ~100-130ms.
+        self._reindex_lock = threading.Lock()
+        self._reindex_removals: List[str] = []
+        self._reindex_additions: List[str] = []
+        self._reindex_thread: Optional[threading.Thread] = None
+        self._reindex_idle = threading.Event()
+        self._reindex_idle.set()
 
     def _run_mu(self, args: List[str], capture_output: bool = True) -> subprocess.CompletedProcess:
         """
@@ -891,12 +903,82 @@ class MuInterface:
 
         try:
             path_obj.rename(new_path)
-            # Update mu database with new location
-            self._run_mu(["remove", str(path_obj)])
-            self._run_mu(["add", str(new_path)])
+            # The rename is what actually changes the message state; telling mu
+            # about it is bookkeeping, so it happens off the calling thread.
+            self.queue_reindex(str(path_obj), str(new_path))
             return str(new_path)
         except OSError:
             return None
+
+    # ------------------------------------------------------------------
+    # Deferred reindexing
+    # ------------------------------------------------------------------
+
+    def queue_reindex(self, removed: Optional[str] = None, added: Optional[str] = None) -> None:
+        """
+        Queue a mu database update to run on a background thread.
+
+        Args:
+            removed: Path that no longer exists and should leave the index
+            added: Path that should be added to the index
+        """
+        with self._reindex_lock:
+            if removed:
+                self._reindex_removals.append(removed)
+            if added:
+                self._reindex_additions.append(added)
+            if not self._reindex_removals and not self._reindex_additions:
+                return
+            self._reindex_idle.clear()
+            if self._reindex_thread is None or not self._reindex_thread.is_alive():
+                self._reindex_thread = threading.Thread(
+                    target=self._reindex_worker,
+                    name="bor-mu-reindex",
+                    daemon=True,
+                )
+                self._reindex_thread.start()
+
+    def _reindex_worker(self) -> None:
+        """Drain the reindex queue, batching pending paths into single commands."""
+        while True:
+            with self._reindex_lock:
+                removals = self._reindex_removals
+                additions = self._reindex_additions
+                if not removals and not additions:
+                    self._reindex_thread = None
+                    self._reindex_idle.set()
+                    return
+                self._reindex_removals = []
+                self._reindex_additions = []
+
+            # mu remove/add both accept any number of paths, so a burst of flag
+            # changes costs two subprocesses rather than two per message.
+            try:
+                if removals:
+                    self._run_mu(["remove", *removals])
+                if additions:
+                    self._run_mu(["add", *additions])
+            except Exception:
+                # A failed reindex leaves the maildir correct but mu stale; the
+                # next `mu index` fixes it. Swallow everything: letting the
+                # worker die here would strand the idle flag, and every later
+                # search would then block for the full wait_for_reindex timeout.
+                pass
+
+    def wait_for_reindex(self, timeout: float = 5.0) -> bool:
+        """
+        Block until queued reindex work has finished.
+
+        Call this from a worker thread before running a query whose results
+        depend on pending flag changes. Never call it on the UI thread.
+
+        Args:
+            timeout: Maximum seconds to wait
+
+        Returns:
+            True if the queue drained, False if the timeout expired
+        """
+        return self._reindex_idle.wait(timeout)
 
     def move(self, path: str, maildir: str) -> Optional[str]:
         """
@@ -928,15 +1010,11 @@ class MuInterface:
             # Store for undo
             self._move_history.append((str(new_path), path))
 
-            # First remove from mu database
-            self._run_mu(["remove", path])
-            
-            # Move the file
+            # Move the file first, then let the background worker tell mu.
+            # Anything that queries mu afterwards waits via wait_for_reindex().
             shutil.move(str(path_obj), str(new_path))
-            
-            # Add to mu database at new location
-            self._run_mu(["add", str(new_path)])
-            
+            self.queue_reindex(path, str(new_path))
+
             return str(new_path)
         except OSError:
             return None

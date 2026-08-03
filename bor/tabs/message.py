@@ -6,6 +6,7 @@ Displays a single email message with headers and body.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import html
 import re
@@ -608,20 +609,86 @@ class MessageViewWidget(BaseTab):
         self._load_message()
 
     def _load_message(self) -> None:
-        """Load the full message content."""
-        mu = self.bor_app.mu
-        self._full_message = mu.view(self._message_ref.path, msgid=self._message_ref.msgid)
+        """Start loading the full message.
+
+        Parsing a message with `email.parser` costs 100-200ms for a typical
+        mail and marking it read spawns mu subprocesses, so all of it runs on a
+        worker thread. Headers we already have are shown immediately.
+        """
+        ref = self._message_ref
+        self._show_pending(ref)
+        self.run_worker(
+            self._load_message_worker(ref),
+            name="load-message",
+            group=f"load-message-{id(self)}",
+            exclusive=True,
+        )
+
+    def _show_pending(self, ref: EmailMessage) -> None:
+        """Render what we know from the index row while the body loads."""
+        try:
+            self.query_one("#msg-header", MessageHeader).update_message(ref)
+            self.query_one("#msg-body", Static).update("Loading...")
+            self.query_one("#calendar-info", Static).remove_class("visible")
+            self.query_one("#attachment-info", Static).display = False
+        except Exception:
+            pass
+
+    async def _load_message_worker(self, ref: EmailMessage) -> None:
+        """Parse and format the message off the UI thread, then render it."""
+        full_message, content, body_text = await asyncio.to_thread(self._read_message, ref)
+
+        # A newer load may have superseded this one, or the tab may be gone.
+        if not self.is_mounted or self._message_ref is not ref:
+            return
+
+        self._apply_message(ref, full_message, content, body_text)
+
+    def _read_message(self, ref: EmailMessage) -> tuple[Optional[EmailMessage], str, Optional[Text]]:
+        """Do the expensive part of loading a message. Runs on a worker thread.
+
+        Everything here is CPU/IO bound and touches no widgets: MIME parsing,
+        the HTML-to-text conversion, and building the Rich Text for the body.
+        """
+        # mu.view() also renames the file to drop the "new"/unread flag.
+        full_message = self.bor_app.mu.view(ref.path, True, ref.msgid)
+        if full_message is None:
+            return None, "", None
+
+        if full_message.body_txt:
+            content = full_message.body_txt
+        elif full_message.body_html:
+            content = html_to_text(full_message.body_html)
+        else:
+            content = "(No message content)"
+
+        try:
+            body_text = _make_body_text(content)
+        except Exception:
+            body_text = Text(content)
+
+        return full_message, content, body_text
+
+    def _apply_message(
+        self,
+        ref: EmailMessage,
+        full_message: Optional[EmailMessage],
+        content: str,
+        body_text: Optional[Text],
+    ) -> None:
+        """Render a loaded message. Runs on the UI thread."""
+        self._full_message = full_message
 
         if self._full_message:
-            if self._full_message.path != self._message_ref.path:
-                self._message_ref.path = self._full_message.path
+            if self._full_message.path != ref.path:
+                ref.path = self._full_message.path
 
-            if "unread" in self._message_ref.flags:
-                self._message_ref.flags.remove("unread")
-            if "new" in self._message_ref.flags:
-                self._message_ref.flags.remove("new")
-            if "seen" not in self._message_ref.flags:
-                self._message_ref.flags.append("seen")
+            if "unread" in ref.flags:
+                ref.flags.remove("unread")
+            if "new" in ref.flags:
+                ref.flags.remove("new")
+            if "seen" not in ref.flags:
+                ref.flags.append("seen")
 
             self._read_message_indices.add(self.bor_app._current_index)
 
@@ -646,18 +713,10 @@ class MessageViewWidget(BaseTab):
             else:
                 attach_info.display = False
 
-            if self._full_message.body_txt:
-                self._content = self._full_message.body_txt
-            elif self._full_message.body_html:
-                self._content = html_to_text(self._full_message.body_html)
-            else:
-                self._content = "(No message content)"
+            self._content = content
 
             body = self.query_one("#msg-body", Static)
-            try:
-                body.update(_make_body_text(self._content))
-            except Exception:
-                body.update(Text(self._content))
+            body.update(body_text if body_text is not None else Text(content))
 
             subject = self._full_message.subject
             title = subject[:20] + "..." if len(subject) > 20 else subject
