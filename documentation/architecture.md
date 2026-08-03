@@ -75,10 +75,25 @@ Key classes:
 
 Key methods:
 - `find()` - Search messages
-- `view()` - Get full message content
+- `view()` - Get full message content (also parses any `text/calendar` part into `EmailMessage.calendar_event`)
 - `move()` - Move message between folders
 - `find_contacts()` - Search contacts
 - `extract_attachment()` - Extract attachment to file
+
+### bor/ical.py
+
+Parses `text/calendar` (iCalendar) invites via the `icalendar` library into a
+display-friendly `CalendarEvent` dataclass. Embedded `VTIMEZONE` definitions are
+honoured, so Windows/Exchange timezone names (e.g. "Eastern Standard Time")
+resolve to the correct DST-aware offset. Parsing is defensive — malformed
+invites yield `None` rather than raising.
+
+Key items:
+- `CalendarEvent` - Essential event fields (method, summary, start/end, location, organizer, status, recurrence)
+- `parse_calendar()` - Parse an iCalendar payload into a `CalendarEvent`
+
+The message viewer (`bor/tabs/message.py`) renders this as a formatted block
+above the body via `format_calendar_event()`.
 
 ### bor/app.py
 

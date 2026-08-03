@@ -282,6 +282,66 @@ def test_reply_falls_back_to_from_without_reply_to() -> None:
     assert "alice@example.com" in to_addrs[0]
 
 
+def test_reply_to_sent_message_uses_original_to_recipients() -> None:
+    """Replying to a sent message should continue the thread with original To recipients."""
+    original_msg = EmailMessage(
+        msgid="<sent@example.com>",
+        from_addr=EmailAddress(name="Me", email="me@example.com"),
+        to_addrs=[
+            EmailAddress(name="Alice", email="alice@example.com"),
+            EmailAddress(name="Bob", email="bob@example.com"),
+            EmailAddress(name="Me", email="ME@example.com"),
+        ],
+        reply_to_addr=EmailAddress(name="Me Reply-To", email="reply-to-me@example.com"),
+    )
+
+    to_addrs = ComposeWidget._reply_to_addresses(original_msg, "me@example.com")
+
+    assert len(to_addrs) == 2
+    assert "Alice <alice@example.com>" in to_addrs
+    assert "Bob <bob@example.com>" in to_addrs
+    assert all("me@example.com" not in addr.casefold() for addr in to_addrs)
+    assert all("reply-to-me@example.com" not in addr for addr in to_addrs)
+
+
+def test_reply_to_sent_message_falls_back_without_original_to_recipients() -> None:
+    """Sent-message reply falls back to normal reply behavior if To has no usable recipients."""
+    original_msg = EmailMessage(
+        msgid="<sent@example.com>",
+        from_addr=EmailAddress(name="Me", email="me@example.com"),
+        to_addrs=[EmailAddress(name="Me", email="me@example.com")],
+        reply_to_addr=EmailAddress(name="Support", email="support@example.com"),
+    )
+
+    to_addrs = ComposeWidget._reply_to_addresses(original_msg, "me@example.com")
+
+    assert to_addrs == ["Support <support@example.com>"]
+
+
+def test_reply_all_to_sent_message_keeps_original_to_out_of_cc() -> None:
+    """Reply-all to a sent message should not duplicate original To recipients in CC."""
+    original_msg = EmailMessage(
+        msgid="<sent@example.com>",
+        from_addr=EmailAddress(name="Me", email="me@example.com"),
+        to_addrs=[
+            EmailAddress(name="Alice", email="alice@example.com"),
+            EmailAddress(name="Bob", email="bob@example.com"),
+        ],
+        cc_addrs=[
+            EmailAddress(name="Bob Alternate", email="BOB@example.com"),
+            EmailAddress(name="Carol", email="carol@example.com"),
+            EmailAddress(name="Me", email="me@example.com"),
+        ],
+    )
+
+    to_addrs = ComposeWidget._reply_to_addresses(original_msg, "me@example.com")
+    cc_addrs = ComposeWidget._reply_cc_addresses(original_msg, "me@example.com", to_addrs)
+
+    assert "Alice <alice@example.com>" in to_addrs
+    assert "Bob <bob@example.com>" in to_addrs
+    assert cc_addrs == ["Carol <carol@example.com>"]
+
+
 def test_forward_attachments_keep_duplicate_names(tmp_path: Path) -> None:
     """Forwarding should keep all attachments with duplicate filenames."""
     attachments = [

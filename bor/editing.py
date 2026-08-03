@@ -20,7 +20,10 @@ def copy_to_clipboard(text: str, append: bool = False) -> None:
             text = pyperclip.paste() + text
         except Exception:
             pass
-    pyperclip.copy(text)
+    try:
+        pyperclip.copy(text)
+    except Exception:
+        pass
 
 
 def kill_input_line(value: str, cursor_position: int) -> tuple[str, int, str]:

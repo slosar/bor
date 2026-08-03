@@ -12,7 +12,7 @@ def test_cli_version_prints_and_exits(capsys):
 
     out = capsys.readouterr().out.strip()
     assert code == 0
-    assert out == "0.6.0"
+    assert out == "0.7-dev"
     app_cls.assert_not_called()
 
 

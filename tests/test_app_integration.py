@@ -7,8 +7,10 @@ Uses Textual's testing framework to simulate user interactions.
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 from datetime import datetime
+from pathlib import Path
 
 from textual.widgets import DataTable, Static
+from textual.widgets._input import Selection
 from bor.tabs.compose import ComposeWidget, FilePathInput, BulkAttachmentList
 from bor.tabs.message_index import ReplyBar
 
@@ -37,6 +39,7 @@ class MockEmailMessage:
         self.thread_level = kwargs.get("thread_level", 0)
         self.reply_to_addr = kwargs.get("reply_to_addr", None)
         self.list_post_addr = kwargs.get("list_post_addr", None)
+        self.calendar_event = kwargs.get("calendar_event", None)
 
     @property
     def is_unread(self):
@@ -480,6 +483,34 @@ class TestComposeBulkAttachments:
     """Test bulk attachment flow in compose."""
 
     @pytest.mark.asyncio
+    async def test_ctrl_l_ctrl_a_keeps_default_path_unselected(
+        self, mock_mu_interface, mock_config
+    ):
+        """Ctrl+L Ctrl+A should leave the default path intact with no active selection."""
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("c")
+                    await pilot.pause()
+
+                    await pilot.press("ctrl+l", "a")
+                    await pilot.pause()
+
+                    path_input = app.query_one("#attachment-path-input", FilePathInput)
+                    expected_value = str(Path.home()) + "/"
+
+                    assert path_input.has_focus
+                    assert path_input.value == expected_value
+                    assert path_input.cursor_position == len(expected_value)
+                    assert path_input.selection == Selection(
+                        len(expected_value), len(expected_value)
+                    )
+
+    @pytest.mark.asyncio
     async def test_ctrl_l_ctrl_z_attaches_marked_files(
         self, mock_mu_interface, mock_config, tmp_path
     ):
@@ -554,33 +585,3 @@ class TestQuit:
                     await pilot.pause()
                     assert app.is_running
                     assert tabs.active == active_before
-from pathlib import Path
-from textual.widgets._input import Selection
-    @pytest.mark.asyncio
-    async def test_ctrl_l_ctrl_a_keeps_default_path_unselected(
-        self, mock_mu_interface, mock_config
-    ):
-        """Ctrl+L Ctrl+A should leave the default path intact with no active selection."""
-        with patch('bor.app.get_config', return_value=mock_config):
-            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
-                from bor.app import BorApp
-
-                app = BorApp()
-                async with app.run_test() as pilot:
-                    await pilot.pause()
-                    await pilot.press("c")
-                    await pilot.pause()
-
-                    await pilot.press("ctrl+l", "a")
-                    await pilot.pause()
-
-                    path_input = app.query_one("#attachment-path-input", FilePathInput)
-                    expected_value = str(Path.home()) + "/"
-
-                    assert path_input.has_focus
-                    assert path_input.value == expected_value
-                    assert path_input.cursor_position == len(expected_value)
-                    assert path_input.selection == Selection(
-                        len(expected_value), len(expected_value)
-                    )
-

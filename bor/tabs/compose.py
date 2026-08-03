@@ -36,6 +36,24 @@ try:
 except ImportError:
     HAS_PYPERCLIP = False
 
+
+def _clip_copy(text: str) -> None:
+    if not HAS_PYPERCLIP:
+        return
+    try:
+        pyperclip.copy(text)
+    except Exception:
+        pass
+
+
+def _clip_paste() -> str:
+    if not HAS_PYPERCLIP:
+        return ""
+    try:
+        return pyperclip.paste() or ""
+    except Exception:
+        return ""
+
 from bor.tabs.base import BaseTab
 from bor.mu import EmailMessage, EmailAddress
 from bor.config import get_config, load_mailrc_aliases
@@ -316,24 +334,20 @@ class AddressInput(CtrlLMixin, Input):
         """Handle key events for completion."""
         # Handle clipboard operations
         if event.key == "ctrl+c":
-            if HAS_PYPERCLIP:
-                # Copy selected text or entire value
-                pyperclip.copy(self.value)
+            _clip_copy(self.value)
             event.prevent_default()
             event.stop()
             return
         elif event.key == "ctrl+v":
-            if HAS_PYPERCLIP:
-                text = pyperclip.paste()
-                if text:
-                    self.insert_text_at_cursor(text)
+            text = _clip_paste()
+            if text:
+                self.insert_text_at_cursor(text)
             event.prevent_default()
             event.stop()
             return
         elif event.key == "ctrl+x":
-            if HAS_PYPERCLIP:
-                pyperclip.copy(self.value)
-                self.value = ""
+            _clip_copy(self.value)
+            self.value = ""
             event.prevent_default()
             event.stop()
             return
@@ -401,23 +415,20 @@ class SubjectInput(CtrlLMixin, Input):
         """Handle key events."""
         # Handle clipboard operations
         if event.key == "ctrl+c":
-            if HAS_PYPERCLIP:
-                pyperclip.copy(self.value)
+            _clip_copy(self.value)
             event.prevent_default()
             event.stop()
             return
         elif event.key == "ctrl+v":
-            if HAS_PYPERCLIP:
-                text = pyperclip.paste()
-                if text:
-                    self.insert_text_at_cursor(text)
+            text = _clip_paste()
+            if text:
+                self.insert_text_at_cursor(text)
             event.prevent_default()
             event.stop()
             return
         elif event.key == "ctrl+x":
-            if HAS_PYPERCLIP:
-                pyperclip.copy(self.value)
-                self.value = ""
+            _clip_copy(self.value)
+            self.value = ""
             event.prevent_default()
             event.stop()
             return
@@ -546,32 +557,28 @@ class ComposeTextArea(CtrlLMixin, TextArea):
 
         # Handle clipboard operations - must prevent default to avoid SIGINT
         if event.key == "ctrl+c":
-            if HAS_PYPERCLIP:
-                # Copy selected text or nothing if no selection
-                selected = self.selected_text
-                if selected:
-                    pyperclip.copy(selected)
+            selected = self.selected_text
+            if selected:
+                _clip_copy(selected)
             event.prevent_default()
             event.stop()
             return
         elif event.key == "ctrl+v":
-            if HAS_PYPERCLIP:
-                text = pyperclip.paste()
-                if text:
-                    self.insert(text)
+            text = _clip_paste()
+            if text:
+                self.insert(text)
             event.prevent_default()
             event.stop()
             return
         elif event.key == "ctrl+x":
-            if HAS_PYPERCLIP:
-                selected = self.selected_text
-                if selected:
-                    pyperclip.copy(selected)
-                    # Delete selection
-                    start, end = self.selection
-                    if start > end:
-                        start, end = end, start
-                    self.delete(start, end)
+            selected = self.selected_text
+            if selected:
+                _clip_copy(selected)
+                # Delete selection
+                start, end = self.selection
+                if start > end:
+                    start, end = end, start
+                self.delete(start, end)
             event.prevent_default()
             event.stop()
             return
@@ -647,6 +654,7 @@ class FilePathInput(Input):
         """Initialize file path input."""
         super().__init__(*args, **kwargs)
         self._completions: List[str] = []
+        self.select_on_focus = False
 
     def _get_completions(self, path_str: str) -> List[str]:
         """
@@ -1106,32 +1114,13 @@ class ComposeWidget(BaseTab):
 
         config = get_config()
         
-        # Set To field - use Reply-To header if present, otherwise use From
         to_input = self.query_one("#to-input", AddressInput)
-        to_addrs = []
-        
-        if msg.list_post_addr and msg.list_post_addr.email:
-            # Mailing list: reply to the list address (List-Post header)
-            to_addrs.append(str(msg.list_post_addr))
-        elif msg.reply_to_addr and msg.reply_to_addr.email:
-            to_addrs.append(str(msg.reply_to_addr))
-        else:
-            to_addrs.append(str(msg.from_addr))
+        to_addrs = self._reply_to_addresses(msg, config.identity.email)
         
         # If reply all, move original TO/CC recipients to CC (excluding self and duplicates)
         if self.reply_all:
             cc_input = self.query_one("#cc-input", AddressInput)
-            cc_list: List[str] = []
-            cc_seen = set(to_addrs)
-
-            for addr in list(msg.to_addrs) + list(msg.cc_addrs):
-                if addr.email == config.identity.email:
-                    continue
-                addr_str = str(addr)
-                if addr_str in cc_seen:
-                    continue
-                cc_list.append(addr_str)
-                cc_seen.add(addr_str)
+            cc_list = self._reply_cc_addresses(msg, config.identity.email, to_addrs)
 
             if cc_list:
                 cc_input.value = ", ".join(cc_list)
@@ -1156,6 +1145,72 @@ class ComposeWidget(BaseTab):
         quoted = "\n".join(f"> {line}" for line in original.split("\n"))
 
         body_input.text = header + quoted + "\n\n" + config.identity.signature
+
+    @staticmethod
+    def _address_matches(email: str, other_email: str) -> bool:
+        """Return True when two email addresses refer to the same mailbox."""
+        return bool(email and other_email and email.casefold() == other_email.casefold())
+
+    @classmethod
+    def _dedupe_reply_addresses(
+        cls,
+        addresses: List[EmailAddress],
+        identity_email: str,
+        seen_emails: Optional[Set[str]] = None,
+    ) -> List[str]:
+        """Format addresses while excluding self and duplicate email addresses."""
+        formatted: List[str] = []
+        seen = seen_emails if seen_emails is not None else set()
+
+        for addr in addresses:
+            if not addr.email or cls._address_matches(addr.email, identity_email):
+                continue
+
+            email_key = addr.email.casefold()
+            if email_key in seen:
+                continue
+
+            formatted.append(str(addr))
+            seen.add(email_key)
+
+        return formatted
+
+    @classmethod
+    def _reply_to_addresses(cls, msg: EmailMessage, identity_email: str) -> List[str]:
+        """Choose To recipients for a reply."""
+        if cls._address_matches(msg.from_addr.email, identity_email):
+            sent_to_addrs = cls._dedupe_reply_addresses(list(msg.to_addrs), identity_email)
+            if sent_to_addrs:
+                return sent_to_addrs
+
+        if msg.list_post_addr and msg.list_post_addr.email:
+            # Mailing list: reply to the list address (List-Post header)
+            return [str(msg.list_post_addr)]
+        if msg.reply_to_addr and msg.reply_to_addr.email:
+            return [str(msg.reply_to_addr)]
+        if msg.from_addr.email:
+            return [str(msg.from_addr)]
+        return []
+
+    @classmethod
+    def _reply_cc_addresses(
+        cls,
+        msg: EmailMessage,
+        identity_email: str,
+        to_addrs: List[str],
+    ) -> List[str]:
+        """Choose CC recipients for reply-all."""
+        seen_emails: Set[str] = set()
+
+        for _, email_addr in email.utils.getaddresses(to_addrs):
+            if email_addr:
+                seen_emails.add(email_addr.casefold())
+
+        return cls._dedupe_reply_addresses(
+            list(msg.to_addrs) + list(msg.cc_addrs),
+            identity_email,
+            seen_emails,
+        )
 
     def _init_forward(self) -> None:
         """Initialize content for forward."""
@@ -1911,4 +1966,3 @@ class ComposeWidget(BaseTab):
             f"{directory} | Space=toggle Enter=attach Esc=cancel Ctrl+A=toggle all | "
             f"{count} selected"
         )
-        self.select_on_focus = False

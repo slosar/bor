@@ -11,8 +11,9 @@ import html
 import re
 import tempfile
 import webbrowser
+from datetime import date, datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 from rich.text import Text
 
@@ -24,6 +25,7 @@ from textual.widgets import Static, Label, Markdown
 from textual.reactive import reactive
 
 from bor.tabs.base import BaseTab
+from bor.ical import CalendarEvent
 from bor.mu import EmailMessage, MuInterface
 from bor.config import get_config
 
@@ -101,6 +103,149 @@ def html_to_text(html: str) -> str:
     text = re.sub(r'&quot;', '"', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
+
+
+_METHOD_TITLES = {
+    "REQUEST": "Calendar Invitation",
+    "CANCEL": "Calendar Invitation — CANCELLED",
+    "REPLY": "Calendar Reply",
+    "COUNTER": "Calendar Counter-Proposal",
+    "PUBLISH": "Calendar Event",
+}
+
+
+def _cal_day(d: Union[datetime, date]) -> str:
+    """Format the date portion, e.g. 'Wednesday, June 24, 2026' (no leading zero)."""
+    return d.strftime("%A, %B ") + str(d.day) + d.strftime(", %Y")
+
+
+def _cal_clock(dt: datetime) -> str:
+    """Format a 12-hour clock time, e.g. '9:30 AM' (platform-independent)."""
+    hour = dt.hour % 12 or 12
+    ampm = "AM" if dt.hour < 12 else "PM"
+    return f"{hour}:{dt.minute:02d} {ampm}"
+
+
+def _cal_offset(dt: datetime) -> str:
+    """Format a UTC offset, e.g. 'UTC-04:00'. Empty for naive datetimes."""
+    off = dt.utcoffset()
+    if off is None:
+        return ""
+    total = int(off.total_seconds())
+    sign = "+" if total >= 0 else "-"
+    total = abs(total)
+    return f"UTC{sign}{total // 3600:02d}:{(total % 3600) // 60:02d}"
+
+
+def _cal_tz_label(dt: datetime) -> str:
+    """Build a timezone label like 'EDT (UTC-04:00)', or 'UTC-04:00', or ''."""
+    abbrev = dt.strftime("%Z") if dt.tzinfo else ""
+    offset = _cal_offset(dt)
+    if abbrev and offset:
+        return f"{abbrev} ({offset})"
+    return abbrev or offset
+
+
+def _cal_when_lines(ev: CalendarEvent) -> list[str]:
+    """Build the human-readable 'When' line(s) for an event."""
+    start = ev.start
+    end = ev.end
+    if start is None:
+        return []
+
+    if ev.all_day:
+        # All-day DTEND is exclusive; subtract a day so a 1-day event reads as
+        # a single date rather than spanning into the next morning.
+        if end is not None and (end - start).days > 1:
+            from datetime import timedelta
+            last = end - timedelta(days=1)
+            return [f"{_cal_day(start)}  →  {_cal_day(last)}  (all day)"]
+        return [f"{_cal_day(start)}  (all day)"]
+
+    # Timed event
+    tz = _cal_tz_label(start)
+    tz_suffix = f" {tz}" if tz else ""
+
+    if end is not None and end.date() != start.date():
+        return [
+            f"{_cal_day(start)} · {_cal_clock(start)}",
+            f"  through {_cal_day(end)} · {_cal_clock(end)}{tz_suffix}",
+        ]
+
+    if end is not None:
+        return [f"{_cal_day(start)} · {_cal_clock(start)} – {_cal_clock(end)}{tz_suffix}"]
+    return [f"{_cal_day(start)} · {_cal_clock(start)}{tz_suffix}"]
+
+
+def _cal_local_line(ev: CalendarEvent) -> Optional[str]:
+    """Return a 'your local time' line if it differs from the invite's timezone."""
+    start = ev.start
+    if ev.all_day or not isinstance(start, datetime) or start.tzinfo is None:
+        return None
+    local_tz = datetime.now().astimezone().tzinfo
+    local_start = start.astimezone(local_tz)
+    if local_start.utcoffset() == start.utcoffset():
+        return None  # Same offset → identical wall-clock time, nothing to add.
+
+    tz = _cal_tz_label(local_start)
+    tz_suffix = f" {tz}" if tz else ""
+    end = ev.end
+    if isinstance(end, datetime):
+        local_end = end.astimezone(local_tz)
+        if local_end.date() != local_start.date():
+            return (
+                f"{_cal_day(local_start)} · {_cal_clock(local_start)} – "
+                f"{_cal_day(local_end)} · {_cal_clock(local_end)}{tz_suffix}"
+            )
+        return (
+            f"{_cal_day(local_start)} · "
+            f"{_cal_clock(local_start)} – {_cal_clock(local_end)}{tz_suffix}"
+        )
+    return f"{_cal_day(local_start)} · {_cal_clock(local_start)}{tz_suffix}"
+
+
+def format_calendar_event(ev: CalendarEvent) -> Text:
+    """Render a calendar invite as a styled Rich Text block.
+
+    Built programmatically via `.append()` so user-supplied values (summary,
+    location, organizer) are never interpreted as Rich/Textual markup.
+    """
+    text = Text()
+    title = _METHOD_TITLES.get(ev.method, "Calendar Invitation")
+    text.append(f"📅  {title}", style="bold")
+
+    def add_row(label: str, value: str) -> None:
+        if not value:
+            return
+        text.append("\n")
+        text.append(label, style="bold")
+        text.append(value)
+
+    if ev.summary:
+        add_row("Event:      ", ev.summary)
+
+    when_lines = _cal_when_lines(ev)
+    if when_lines:
+        add_row("When:       ", when_lines[0])
+        for extra in when_lines[1:]:
+            text.append("\n")
+            text.append(" " * 12)
+            text.append(extra)
+
+    local_line = _cal_local_line(ev)
+    if local_line:
+        add_row("Your time:  ", local_line)
+
+    if ev.recurrence:
+        add_row("Repeats:    ", ev.recurrence)
+
+    add_row("Where:      ", ev.location)
+    add_row("Organizer:  ", ev.organizer)
+
+    if ev.status:
+        add_row("Status:     ", ev.status.capitalize())
+
+    return text
 
 
 class MessageHeader(Static):
@@ -402,6 +547,19 @@ class MessageViewWidget(BaseTab):
         padding: 0 1;
         margin: 1 0;
     }
+
+    MessageViewWidget .calendar-info {
+        display: none;
+        background: $primary-darken-2;
+        color: $text;
+        border: round $primary;
+        padding: 0 1;
+        margin: 1 0;
+    }
+
+    MessageViewWidget .calendar-info.visible {
+        display: block;
+    }
     """
 
     show_full_headers: reactive[bool] = reactive(False)
@@ -430,6 +588,7 @@ class MessageViewWidget(BaseTab):
         from bor.tabs.message_index import ConfirmBar, FlagBar, ReplyBar
         with ScrollableContainer():
             yield MessageHeader(self._message_ref, id="msg-header")
+            yield Static("", id="calendar-info", classes="calendar-info")
             yield Static("", id="attachment-info", classes="attachment-info")
             yield Static("Loading...", id="msg-body")
         yield ConfirmBar("", id="confirm-bar")
@@ -468,6 +627,16 @@ class MessageViewWidget(BaseTab):
 
             header = self.query_one("#msg-header", MessageHeader)
             header.update_message(self._full_message)
+
+            cal_info = self.query_one("#calendar-info", Static)
+            if self._full_message.calendar_event:
+                try:
+                    cal_info.update(format_calendar_event(self._full_message.calendar_event))
+                    cal_info.add_class("visible")
+                except Exception:
+                    cal_info.remove_class("visible")
+            else:
+                cal_info.remove_class("visible")
 
             attach_info = self.query_one("#attachment-info", Static)
             if self._full_message.attachments:

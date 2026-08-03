@@ -19,6 +19,8 @@ from email.parser import BytesParser
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from bor.ical import CalendarEvent, parse_calendar
+
 
 @dataclass
 class EmailAddress:
@@ -108,6 +110,7 @@ class EmailMessage:
     attachments: List[Dict[str, Any]] = field(default_factory=list)
     thread_level: int = 0  # For threading display
     extra_headers: Dict[str, str] = field(default_factory=dict)  # Additional headers for full view
+    calendar_event: Optional["CalendarEvent"] = None  # Parsed text/calendar invite, if any
 
     @property
     def is_unread(self) -> bool:
@@ -711,6 +714,15 @@ class MuInterface:
                                 msg.body_html += html
                             else:
                                 msg.body_html = html
+                    elif content_type == "text/calendar" and msg.calendar_event is None:
+                        payload = part.get_payload(decode=True)
+                        if payload and isinstance(payload, bytes):
+                            charset = part.get_content_charset() or "utf-8"
+                            try:
+                                cal_text = payload.decode(charset, errors="replace")
+                            except LookupError:
+                                cal_text = payload.decode("utf-8", errors="replace")
+                            msg.calendar_event = parse_calendar(cal_text)
             else:
                 content_type = email_msg.get_content_type()
                 payload = email_msg.get_payload(decode=True)
@@ -723,6 +735,8 @@ class MuInterface:
 
                     if content_type == "text/html":
                         msg.body_html = text
+                    elif content_type == "text/calendar":
+                        msg.calendar_event = parse_calendar(text)
                     else:
                         msg.body_txt = text
 

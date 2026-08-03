@@ -4,13 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
+ 
 ## [0.7]
 
-### Fixed
-- Fixed apply-flag prompt key handling so unrelated keys are ignored without leaving the prompt or triggering message navigation.
+### Added
+- Calendar invites (messages with a `text/calendar` part) now show a formatted summary block above the message body, listing the event title, date and time (with timezone), location, organizer, recurrence, and status. Times are shown in the invite's own timezone and, when it differs, also converted to your local time. Windows/Exchange timezone names (e.g. "Eastern Standard Time") are resolved DST-aware via the new `icalendar` dependency.
 
-## [0.6.0]
+### Fixed
+- Clipboard operations (`Ctrl+C`/`Ctrl+V`/`Ctrl+X`) in compose no longer crash over SSH or in other environments where pyperclip is installed but no clipboard backend (xclip, display, etc.) is available. The operations now fail silently instead of raising `PyperclipException`.
+- Fixed apply-flag prompt key handling so unrelated keys are ignored without leaving the prompt or triggering message navigation.
+- Fixed the compose attachment path prompt (`Ctrl+L A`) selecting the entire default directory on focus. The prompt now leaves the prefilled path intact with the cursor at the end, so typing continues from the default location instead of replacing it.
+
+## [0.6]
 
 ### Added
 - `Ctrl+L Z` in compose now supports bulk attachment selection. After choosing a directory, Bor opens a keyboard-friendly picker where `Space` toggles files, `Enter` attaches the selected set, `Esc` cancels, and `Ctrl+A` toggles all files.
@@ -56,4 +61,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed marked-message persistence when viewing another message and returning to the index (`m`, `m`, `Enter`, `Q`): previously marked messages now remain marked.
 - Fixed marked-row rendering so message marking inverts the full row width, not only the visible text.
 - Fixed compose header row alignment so `To:`, `CC:`, `BCC:`, and `Subject:` labels are vertically centered with their input fields.
-- Fixed the compose attachment path prompt (`Ctrl+L A`) selecting the entire default directory on focus. The prompt now leaves the prefilled path intact with the cursor at the end, so typing continues from the default location instead of replacing it.

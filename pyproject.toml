@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bormail"
-version = "0.6.0"
+version = "0.7-dev"
 description = "Terminal-based email reader using mu and textual"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,6 +32,7 @@ dependencies = [
     "rich>=15.0.0",
     "tomli>=2.0.0;python_version<'3.11'",
     "pyperclip>=1.8.0",
+    "icalendar>=6.0",
 ]
 
 [project.optional-dependencies]

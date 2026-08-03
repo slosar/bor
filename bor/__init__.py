@@ -5,5 +5,5 @@ A terminal-based email client using mu for email access
 and textual for the user interface.
 """
 
-__version__ = "0.6.0"
+__version__ = "0.7-dev"
 __author__ = "Bor Development Team"
