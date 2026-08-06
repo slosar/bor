@@ -716,10 +716,14 @@ class ComposeTextArea(CtrlLMixin, TextArea):
                     if char in self._aliases:
                         # Expand alias
                         expansion = self._aliases[char]
-                        # Remove the trigger character and insert expansion
-                        new_line = line[:cursor[1] - 1] + expansion + line[cursor[1]:]
-                        lines[cursor[0]] = new_line
-                        self.text = "\n".join(lines)
+                        # Use an edit rather than reloading the whole document so
+                        # the cursor and targeted repaint remain correct.
+                        self.replace(
+                            expansion,
+                            (cursor[0], cursor[1] - 1),
+                            cursor,
+                            maintain_selection_offset=False,
+                        )
                         event.prevent_default()
                         event.stop()
                         return

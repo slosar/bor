@@ -492,6 +492,27 @@ def test_compose_kill_line_appends_consecutive_kills_to_clipboard(
     assert editor.text == ""
 
 
+def test_text_alias_completion_preserves_cursor_and_repaints_edit() -> None:
+    """Tab expansion should appear immediately without moving the cursor to the top."""
+    from textual import events
+
+    editor = ComposeTextArea("first\nsecond x tail")
+    editor.set_aliases({"x": "expanded"})
+    editor.cursor_location = (1, 8)
+    refreshed_lines: list[tuple[int, int]] = []
+
+    def record_refresh(y: int, count: int = 1) -> None:
+        refreshed_lines.append((y, count))
+
+    editor.refresh_lines = record_refresh
+
+    editor._on_key(events.Key("tab", None))
+
+    assert editor.text == "first\nsecond expanded tail"
+    assert editor.cursor_location == (1, 15)
+    assert refreshed_lines
+
+
 def test_file_path_completion_returns_single_match() -> None:
     """Tab should complete immediately when there is exactly one match."""
     completed = FilePathInput._longest_shared_completion_prefix(
