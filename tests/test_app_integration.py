@@ -11,7 +11,7 @@ from pathlib import Path
 
 from textual.widgets import DataTable, Static
 from textual.widgets._input import Selection
-from bor.tabs.compose import ComposeWidget, FilePathInput, BulkAttachmentList
+from bor.tabs.compose import ComposeWidget, FilePathInput, BulkAttachmentList, ComposeTextArea
 from bor.tabs.message_index import ReplyBar
 
 # Mock EmailMessage for testing
@@ -477,6 +477,66 @@ class TestIndexRefreshOnReturn:
                     await pilot.pause()
 
                     assert mock_mu_interface.find.call_count > initial_find_calls
+
+
+class TestComposeLayout:
+    """Test compose screen layout."""
+
+    @pytest.mark.asyncio
+    async def test_compose_headers_use_one_row_each(self, mock_mu_interface, mock_config):
+        """Address and subject fields should leave most of the screen for the body."""
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("c")
+                    await pilot.pause()
+
+                    header = app.query_one(ComposeWidget).query_one(".header-container")
+                    rows = list(header.query(".compose-header-row"))
+
+                    assert len(rows) == 4
+                    assert header.size.height == 4
+                    assert all(row.size.height == 1 for row in rows)
+
+    @pytest.mark.asyncio
+    async def test_arrow_keys_move_through_compose_headers(self, mock_mu_interface, mock_config):
+        """Up and Down should follow the visual order of compact header fields."""
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("c")
+                    await pilot.pause()
+
+                    assert app.query_one("#to-input").has_focus
+
+                    for field_id in ("cc-input", "bcc-input", "subject-input", "body-input"):
+                        await pilot.press("down")
+                        assert app.query_one(f"#{field_id}").has_focus
+
+                    body_input = app.query_one("#body-input", ComposeTextArea)
+                    body_input.text = "first\nsecond"
+                    body_input.cursor_location = (1, 0)
+                    await pilot.press("up")
+                    assert body_input.has_focus
+                    assert body_input.cursor_location == (0, 0)
+
+                    await pilot.press("up")
+                    assert app.query_one("#subject-input").has_focus
+
+                    for field_id in ("bcc-input", "cc-input", "to-input"):
+                        await pilot.press("up")
+                        assert app.query_one(f"#{field_id}").has_focus
+
+                    await pilot.press("up")
+                    assert app.query_one("#to-input").has_focus
 
 
 class TestComposeBulkAttachments:

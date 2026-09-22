@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.7]
 
 ### Added
+- The compose header is now compact: To, CC, BCC and Subject are one line each instead of three, leaving most of the screen for the message body. `Up`/`Down` arrow keys move vertically through the header fields in visual order (To → CC → BCC → Subject → body), and pressing `Up` on the first visual line of the body moves focus back to the Subject field.
 - Calendar invites (messages with a `text/calendar` part) now show a formatted summary block above the message body, listing the event title, date and time (with timezone), location, organizer, recurrence, and status. Times are shown in the invite's own timezone and, when it differs, also converted to your local time. Windows/Exchange timezone names (e.g. "Eastern Standard Time") are resolved DST-aware via the new `icalendar` dependency.
 
 ### Fixed

@@ -146,7 +146,8 @@ The URL picker shows and opens the first 9 URLs. If a message has more than 9 UR
 |-----|--------|
 | Tab | Move to next field / Autocomplete |
 | Shift+Tab | Move to previous field |
-| Arrow keys | Move within text |
+| Up/Down | Move between To/CC/BCC/Subject fields and the body |
+| Left/Right | Move within text |
 | PageUp/PageDown | Page through body |
 | Home | Go to start of line |
 | End | Go to end of line |

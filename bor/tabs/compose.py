@@ -213,7 +213,32 @@ class CtrlLMixin:
         return False
 
 
-class AddressInput(CtrlLMixin, Input):
+class HeaderNavigationMixin:
+    """Move focus vertically through the compact compose header."""
+
+    _header_input_ids = ("to-input", "cc-input", "bcc-input", "subject-input")
+
+    def handle_header_navigation_key(self, event: events.Key) -> bool:
+        """Handle Up and Down as navigation between compose fields."""
+        if event.key not in {"up", "down"} or self.id not in self._header_input_ids:
+            return False
+
+        current_index = self._header_input_ids.index(self.id)
+        if event.key == "up":
+            target_id = self._header_input_ids[max(0, current_index - 1)]
+        elif current_index < len(self._header_input_ids) - 1:
+            target_id = self._header_input_ids[current_index + 1]
+        else:
+            target_id = "body-input"
+
+        compose_widget = self.query_ancestor(ComposeWidget)
+        compose_widget.query_one(f"#{target_id}").focus()
+        event.prevent_default()
+        event.stop()
+        return True
+
+
+class AddressInput(HeaderNavigationMixin, CtrlLMixin, Input):
     """
     Input widget for email addresses with autocompletion.
 
@@ -365,6 +390,11 @@ class AddressInput(CtrlLMixin, Input):
         # Check Ctrl+L sequences first
         if self.handle_ctrl_l_key(event):
             return
+
+        if self.handle_header_navigation_key(event):
+            self._completions = []
+            self._completion_index = 0
+            return
             
         if event.key == "tab":
             # Get the current word being typed
@@ -405,7 +435,7 @@ class AddressInput(CtrlLMixin, Input):
             super()._on_key(event)
 
 
-class SubjectInput(CtrlLMixin, Input):
+class SubjectInput(HeaderNavigationMixin, CtrlLMixin, Input):
     """Input widget for subject line with Ctrl+L support."""
     
     def __init__(self, *args, **kwargs) -> None:
@@ -444,6 +474,8 @@ class SubjectInput(CtrlLMixin, Input):
             return
         
         if self.handle_ctrl_l_key(event):
+            return
+        if self.handle_header_navigation_key(event):
             return
         if event.key == "tab":
             # Move to next field (editor)
@@ -700,6 +732,16 @@ class ComposeTextArea(CtrlLMixin, TextArea):
         
         # Check Ctrl+L sequences first
         if self.handle_ctrl_l_key(event):
+            return
+
+        if event.key == "up":
+            if self.wrapped_document.location_to_offset(self.cursor_location).y == 0:
+                compose_widget = self.query_ancestor(ComposeWidget)
+                compose_widget.query_one("#subject-input").focus()
+            else:
+                self.action_cursor_up()
+            event.prevent_default()
+            event.stop()
             return
 
         # Handle Tab for text aliases
@@ -972,22 +1014,25 @@ class ComposeWidget(BaseTab):
         background: $surface;
     }
 
-    ComposeWidget .header-row {
-        height: 3;
+    ComposeWidget .compose-header-row {
+        height: 1;
         margin: 0;
+        overflow: hidden;
     }
 
     ComposeWidget .header-label {
         width: 10;
-        height: 3;
+        height: 1;
         color: $text-muted;
         content-align: left middle;
     }
 
     ComposeWidget .header-input {
         width: 1fr;
-        height: 3;
+        height: 1;
         margin: 0;
+        padding: 0;
+        border: none;
     }
 
     ComposeWidget .body-container {
@@ -1107,16 +1152,16 @@ class ComposeWidget(BaseTab):
 
         with Vertical():
             with Container(classes="header-container"):
-                with Horizontal(classes="header-row"):
+                with Horizontal(classes="compose-header-row"):
                     yield Label("To:", classes="header-label")
                     yield AddressInput(id="to-input", classes="header-input")
-                with Horizontal(classes="header-row"):
+                with Horizontal(classes="compose-header-row"):
                     yield Label("CC:", classes="header-label")
                     yield AddressInput(id="cc-input", classes="header-input")
-                with Horizontal(classes="header-row"):
+                with Horizontal(classes="compose-header-row"):
                     yield Label("BCC:", classes="header-label")
                     yield AddressInput(id="bcc-input", classes="header-input")
-                with Horizontal(classes="header-row"):
+                with Horizontal(classes="compose-header-row"):
                     yield Label("Subject:", classes="header-label")
                     yield SubjectInput(id="subject-input", classes="header-input")
 
