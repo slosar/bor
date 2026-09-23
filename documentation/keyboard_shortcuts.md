@@ -105,7 +105,7 @@ Complete reference of all keyboard shortcuts in Bor email reader.
 | R | Reply to message |
 | F | Forward message |
 | C | Compose new message |
-| M | Mark/unmark message and advance to next |
+| M | Mark/unmark message and advance to next (marked messages show a red 𝐌 in the flags column) |
 | X | Archive message (with y/n confirmation) |
 | A | Apply flag (U/N/F to add, Shift+U/N/F to remove) |
 | D | Delete message (with y/n confirmation) |

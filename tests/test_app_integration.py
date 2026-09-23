@@ -317,6 +317,44 @@ class TestMessageView:
                     assert index_widget.marked_messages == {0, 1}
 
     @pytest.mark.asyncio
+    async def test_marked_message_shows_symbol_in_flags_column(self, mock_mu_interface, mock_config):
+        """Marking shows the marked symbol in the flags column instead of inverting the row."""
+        from textual.coordinate import Coordinate
+
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+
+                    table = app.query_one(DataTable)
+                    table.move_cursor(row=0)
+
+                    await pilot.press("m")
+                    await pilot.pause()
+
+                    symbol = mock_config.display.flag_marked
+                    flags_cell = table.get_cell_at(Coordinate(0, 0))
+                    assert symbol in str(flags_cell)
+                    mark_span = next(
+                        (span for span in flags_cell.spans
+                         if str(flags_cell)[span.start:span.end] == symbol),
+                        None,
+                    )
+                    assert mark_span is not None
+                    assert "red" in str(mark_span.style)
+
+                    # Toggling the mark off removes the symbol again
+                    await pilot.press("p")
+                    await pilot.press("m")
+                    await pilot.pause()
+
+                    flags_cell = str(table.get_cell_at(Coordinate(0, 0)))
+                    assert symbol not in flags_cell
+
+    @pytest.mark.asyncio
     async def test_o_opens_selected_url(self, mock_mu_interface, mock_config):
         """Test that O prompts for URL selection when multiple links exist."""
         mock_mu_interface.view.return_value = MockEmailMessage(

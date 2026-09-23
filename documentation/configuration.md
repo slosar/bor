@@ -91,9 +91,6 @@ unread = "bold cyan"
 # Color for flagged/important messages (default: bold yellow)
 flagged = "bold yellow"
 
-# Style for marked messages (default: reverse)
-marked = "reverse"
-
 # Header styling
 header = "bold"
 
@@ -151,6 +148,7 @@ flag_replied = "↩"
 flag_forwarded = "→"
 flag_flagged = "⚑"
 flag_attachment = "📎"
+flag_marked = "𝐌"
 flag_encrypted = "🔒"
 flag_signed = "✓"
 ```

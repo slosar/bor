@@ -96,6 +96,7 @@ class DisplayConfig:
     flag_forwarded: str = "→"
     flag_flagged: str = "⚑"
     flag_attachment: str = "📎"
+    flag_marked: str = "𝐌"
     flag_encrypted: str = "🔒"
     flag_signed: str = "✓"
 

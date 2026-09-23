@@ -10,7 +10,6 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional, Set
-from rich.style import Style as RichStyle
 
 from textual import events
 from textual.app import ComposeResult
@@ -337,24 +336,6 @@ class FlagBar(Static):
     can_focus = True
 
 
-class MessageDataTable(DataTable):
-    """DataTable with row-level style support for marked rows."""
-
-    def __init__(self, *args, **kwargs) -> None:
-        super().__init__(*args, **kwargs)
-        self.marked_rows: set[int] = set()
-        self.marked_style: str = "reverse"
-
-    def _get_row_style(self, row_index: int, base_style):
-        row_style = super()._get_row_style(row_index, base_style)
-        if row_index in self.marked_rows:
-            try:
-                return row_style + RichStyle.parse(self.marked_style)
-            except Exception:
-                return row_style + RichStyle.parse("reverse")
-        return row_style
-
-
 class MessageIndexWidget(BaseTab):
     """
     Message Index widget.
@@ -444,10 +425,6 @@ class MessageIndexWidget(BaseTab):
         color: $warning;
     }
 
-    MessageIndexWidget .marked {
-        background: $primary-darken-2;
-    }
-
     MessageIndexWidget .confirm-bar {
         height: 1;
         dock: bottom;
@@ -472,7 +449,7 @@ class MessageIndexWidget(BaseTab):
         with Vertical():
             with Container(classes="search-bar", id="search-bar"):
                 yield SearchInput(id="search-input")
-            yield MessageDataTable(id="message-table", cursor_type="row")
+            yield DataTable(id="message-table", cursor_type="row")
             yield ConfirmBar("", classes="confirm-bar", id="confirm-bar")
             yield FlagBar("", id="flag-bar")
             yield ReplyBar("", id="reply-bar")
@@ -481,7 +458,7 @@ class MessageIndexWidget(BaseTab):
 
     def on_mount(self) -> None:
         """Handle widget mount."""
-        table = self.query_one(MessageDataTable)
+        table = self.query_one(DataTable)
 
         # Add columns
         config = get_config()
@@ -492,13 +469,6 @@ class MessageIndexWidget(BaseTab):
 
         table.cursor_type = "row"
         table.zebra_stripes = True
-
-    def _sync_marked_rows_to_table(self) -> None:
-        """Synchronize marked rows and style to the DataTable."""
-        table = self.query_one(MessageDataTable)
-        table.marked_rows = set(self.marked_messages)
-        table.marked_style = get_config().colors.marked or "reverse"
-        table.refresh()
 
     async def search(self, query: str, threads: Optional[bool] = None) -> None:
         """
@@ -527,7 +497,6 @@ class MessageIndexWidget(BaseTab):
 
         # Refresh the table
         await self._refresh_table()
-        self._sync_marked_rows_to_table()
 
         # Update status
         self._update_status()
@@ -546,7 +515,7 @@ class MessageIndexWidget(BaseTab):
         """Refresh the message table with current messages."""
         from rich.text import Text
         
-        table = self.query_one(MessageDataTable)
+        table = self.query_one(DataTable)
         table.clear()
 
         config = get_config()
@@ -555,9 +524,6 @@ class MessageIndexWidget(BaseTab):
         thread_prefixes = self._compute_thread_prefixes(self.messages)
 
         for idx, msg in enumerate(self.messages):
-            # Build flags string
-            flags = self._format_flags(msg, config)
-
             # Format date
             date_str = self._format_date(msg.date, config)
 
@@ -572,21 +538,19 @@ class MessageIndexWidget(BaseTab):
                 subject = f"{thread_prefixes[idx]} {subject}"
 
             # Determine text styling based on message state.
-            # Marked-row styling is handled at table row level.
             style = ""
             if msg.is_flagged:
                 style = f"bold {config.colors.important}"
             elif msg.is_unread:
                 style = f"bold {config.colors.unread}"
-            
+
             # Create styled text for each cell
+            flags_text = self._flags_text(msg, config, marked=idx in self.marked_messages, base_style=style)
             if style:
-                flags_text = Text(flags, style=style)
                 date_text = Text(date_str, style=style)
                 from_text = Text(from_str, style=style)
                 subject_text = Text(subject, style=style)
             else:
-                flags_text = flags
                 date_text = date_str
                 from_text = from_str
                 subject_text = subject
@@ -672,6 +636,18 @@ class MessageIndexWidget(BaseTab):
             flags.append(config.display.flag_attachment)
 
         return "".join(flags)
+
+    def _flags_text(self, msg: EmailMessage, config, marked: bool, base_style: str) -> "Text":
+        """Build the flags column cell; the marked symbol is shown in red."""
+        from rich.text import Text
+
+        text = Text()
+        if marked:
+            text.append(config.display.flag_marked, style="red")
+        flags = self._format_flags(msg, config)
+        if flags:
+            text.append(flags, style=base_style or None)
+        return text
 
     def _format_date(self, date: Optional[datetime], config) -> str:
         """Format date for display."""
@@ -895,7 +871,6 @@ class MessageIndexWidget(BaseTab):
         }
         if self.marked_messages:
             await self._refresh_table()
-        self._sync_marked_rows_to_table()
         self._update_status()
 
     def action_mark_message(self) -> None:
@@ -907,11 +882,10 @@ class MessageIndexWidget(BaseTab):
             self.marked_messages.remove(idx)
         else:
             self.marked_messages.add(idx)
-        
+
         # Update the row styling
         self._update_row_style(idx)
         self._update_status()
-        self._sync_marked_rows_to_table()
         # Move to next message
         self.action_cursor_down()
 
@@ -925,9 +899,7 @@ class MessageIndexWidget(BaseTab):
         msg = self.messages[idx]
         config = get_config()
         table = self.query_one(DataTable)
-        
-        # Build flags string
-        flags = self._format_flags(msg, config)
+
         date_str = self._format_date(msg.date, config)
         from_str = msg.from_addr.name or msg.from_addr.email
         if len(from_str) > config.display.from_width:
@@ -940,7 +912,6 @@ class MessageIndexWidget(BaseTab):
             subject = f"{thread_prefixes[idx]} {subject}"
         
         # Determine text styling.
-        # Marked-row styling is handled at table row level.
         style = ""
         if msg.is_flagged:
             style = f"bold {config.colors.important}"
@@ -949,14 +920,13 @@ class MessageIndexWidget(BaseTab):
         
         # Create styled text using Rich Style for explicit color control
         from rich.style import Style as RichStyle
+        flags_text = self._flags_text(msg, config, marked=idx in self.marked_messages, base_style=style)
         if style:
             rich_style = RichStyle.parse(style)
-            flags_text = Text(flags, style=rich_style)
             date_text = Text(date_str, style=rich_style)
             from_text = Text(from_str, style=rich_style)
             subject_text = Text(subject, style=rich_style)
         else:
-            flags_text = Text(flags)
             date_text = Text(date_str)
             from_text = Text(from_str)
             subject_text = Text(subject)
@@ -1034,7 +1004,6 @@ class MessageIndexWidget(BaseTab):
                     msg = self.messages[idx]
                     self.bor_app.mu.move(msg.path, archive_folder)
             self.marked_messages.clear()
-            self._sync_marked_rows_to_table()
         else:
             # Archive current message
             msg = self._get_current_message()
@@ -1122,8 +1091,7 @@ class MessageIndexWidget(BaseTab):
         if self.marked_messages:
             self.marked_messages.clear()
             self._update_status()
-            self._sync_marked_rows_to_table()
-        
+
         self.query_one(DataTable).focus()
 
     async def action_undo(self) -> None:
@@ -1177,7 +1145,6 @@ class MessageIndexWidget(BaseTab):
                     msg = self.messages[idx]
                     self.bor_app.mu.move(msg.path, config.folders.trash)
             self.marked_messages.clear()
-            self._sync_marked_rows_to_table()
         else:
             msg = self._get_current_message()
             if msg:

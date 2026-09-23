@@ -53,7 +53,6 @@ Your Name
 # You can also use hex colors like "#ff8c00"
 unread = "blue"
 important = "dark_orange"
-marked = "reverse"
 header = "bold"
 quoted = "italic dim"
 
@@ -106,6 +105,7 @@ flag_replied = "↩"
 flag_forwarded = "→"
 flag_flagged = "⚑"
 flag_attachment = "📎"
+flag_marked = "𝐌"
 flag_encrypted = "🔒"
 flag_signed = "✓"
 
