@@ -2,6 +2,7 @@
 
 from unittest.mock import patch
 
+from bor import __version__
 from bor.app import main
 
 
@@ -12,7 +13,7 @@ def test_cli_version_prints_and_exits(capsys):
 
     out = capsys.readouterr().out.strip()
     assert code == 0
-    assert out == "0.7-dev"
+    assert out == __version__
     app_cls.assert_not_called()
 
 

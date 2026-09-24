@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.7]
+## [1.0]
 
 ### Added
 - The compose header is now compact: To, CC, BCC and Subject are one line each instead of three, leaving most of the screen for the message body. `Up`/`Down` arrow keys move vertically through the header fields in visual order (To → CC → BCC → Subject → body), and pressing `Up` on the first visual line of the body moves focus back to the Subject field.
