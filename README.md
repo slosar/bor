@@ -42,7 +42,6 @@ Bor uses [mu](https://djcbsoftware.nl/code/mu/) for email access under the hoold
 ## Known issues
 
 - no support for folders. You can mu search with maildir:/folder, but all archived messages go to the archived folder. This is how my work-flow works. Feel free to add and make pull request.
-- Clicking with mouse on the link does not work. For emails with one or two links, 'O' shortcut is preferrable, but for complex long messages, clicking on the link would be better.
 
 ## Installation
 
