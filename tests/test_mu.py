@@ -211,6 +211,26 @@ class TestEmailMessage:
         assert msg.has_attachments
         assert msg.priority == "high"
 
+    def test_from_mu_json_uses_unix_date_and_utc_offset(self):
+        """Use mu 1.14 date fields to preserve the sender's timezone."""
+        data = {
+            ":date": [30878, 30260, 0],
+            ":date-unix": 1609459200,
+            ":utc-offset": 3600,
+        }
+
+        msg = EmailMessage.from_mu_json(data)
+
+        assert msg.date == datetime.fromisoformat("2021-01-01T01:00:00+01:00")
+
+    def test_from_mu_json_uses_utc_offset_with_legacy_date(self):
+        """Apply mu's offset when a wrapper omits the Unix timestamp."""
+        data = {":date": 1609459200, ":utc-offset": -18000}
+
+        msg = EmailMessage.from_mu_json(data)
+
+        assert msg.date == datetime.fromisoformat("2020-12-31T19:00:00-05:00")
+
     def test_from_mu_json_with_reply_to_list(self):
         """Test that Reply-To is parsed from mu JSON when present as a list."""
         data = {

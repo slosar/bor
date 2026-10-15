@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1]
+
+### Fixed
+- Fixed `Ctrl+K` in the compose editor appearing broken when replying to messages with CRLF (Windows-style) line endings. Textual treats `\r\n` as one line separator, so the cursor index landed on the invisible `\r` and the first kill removed only that character — the line break survived until a second press. Reply quotes, forwarded bodies, and drafts are now normalized to LF when loaded into the editor, pasted clipboard text is normalized too, and `kill_text_line` treats a remaining `\r\n` at the cursor as a single line break.
+- Read the mail root from `mu info store` so archiving uses the configured Maildir with mu 1.14.
+- Use mu's Unix timestamp and UTC offset to display message dates in the sender's timezone.
+
 ## [1.0]
 
 ### Added

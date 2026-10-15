@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from email import policy, utils as email_utils
 from email.parser import BytesParser
 from pathlib import Path
@@ -176,19 +176,41 @@ class EmailMessage:
         msg.subject = get("subject", "(no subject)")
         msg.size = get("size", 0)
 
-        # Parse date - mu returns date as [high, low, usec] array
+        # mu 1.12.8+ provides an easy-to-use Unix timestamp, and mu 1.14.3+
+        # also provides the message's original UTC offset in seconds.
         date_val = get("date")
-        if date_val:
+        unix_date = get("date-unix")
+        utc_offset = get("utc-offset")
+        date_tz = None
+        if isinstance(utc_offset, int) and not isinstance(utc_offset, bool):
+            if abs(utc_offset) < 24 * 60 * 60:
+                date_tz = timezone(timedelta(seconds=utc_offset))
+
+        if isinstance(unix_date, (int, float)) and not isinstance(unix_date, bool):
+            try:
+                msg.date = datetime.fromtimestamp(unix_date, tz=date_tz)
+            except (OverflowError, OSError, ValueError):
+                msg.date = None
+        elif date_val:
             if isinstance(date_val, list) and len(date_val) >= 2:
-                # mu returns [high, low, usec] where timestamp = high * 65536 + low
+                # Legacy mu JSON time: [high, low, usec], with
+                # timestamp = high * 65536 + low.
                 high, low = date_val[0], date_val[1]
                 timestamp = high * 65536 + low
-                msg.date = datetime.fromtimestamp(timestamp)
+                try:
+                    msg.date = datetime.fromtimestamp(timestamp, tz=date_tz)
+                except (OverflowError, OSError, ValueError):
+                    msg.date = None
             elif isinstance(date_val, (int, float)):
-                msg.date = datetime.fromtimestamp(date_val)
+                try:
+                    msg.date = datetime.fromtimestamp(date_val, tz=date_tz)
+                except (OverflowError, OSError, ValueError):
+                    msg.date = None
             elif isinstance(date_val, str):
                 try:
                     msg.date = datetime.fromisoformat(date_val)
+                    if msg.date.tzinfo is None and date_tz is not None:
+                        msg.date = msg.date.replace(tzinfo=date_tz)
                 except ValueError:
                     msg.date = None
 
@@ -336,21 +358,22 @@ class MuInterface:
         if self._root_maildir:
             return self._root_maildir
 
-        result = self._run_mu(["info"])
-        if result.returncode == 0:
-            for line in result.stdout.split("\n"):
-                # mu info output format: "| maildir           | /home/anze/mail                 |"
-                if "maildir" in line.lower() and "|" in line:
-                    parts = [p.strip() for p in line.split("|")]
-                    # parts will be ['', 'maildir', '/home/anze/mail', '']
-                    for i, part in enumerate(parts):
-                        if part.lower() == "maildir" and i + 1 < len(parts):
-                            self._root_maildir = parts[i + 1].strip()
-                            return self._root_maildir
+        # Recent mu versions report the root under `mu info store`; older
+        # versions included it in `mu info` itself.
+        for args in (["info", "store"], ["info"]):
+            result = self._run_mu(args)
+            if result.returncode != 0:
+                continue
+            for line in result.stdout.splitlines():
+                parts = [part.strip() for part in line.split("|")]
+                if len(parts) < 3 or parts[1].lower() not in {"root-maildir", "maildir"}:
+                    continue
+                root = Path(parts[2]).expanduser()
+                if root.is_absolute() and root.is_dir():
+                    self._root_maildir = str(root)
+                    return self._root_maildir
 
-        # Fallback to common location
-        self._root_maildir = str(Path.home() / "Maildir")
-        return self._root_maildir
+        raise RuntimeError("Could not determine the root maildir from mu info")
 
     def find(
         self,
