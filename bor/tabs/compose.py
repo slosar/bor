@@ -52,14 +52,14 @@ def _clip_paste() -> str:
     if not HAS_PYPERCLIP:
         return ""
     try:
-        return pyperclip.paste() or ""
+        return normalize_newlines(pyperclip.paste() or "")
     except Exception:
         return ""
 
 from bor.tabs.base import BaseTab
 from bor.mu import EmailMessage, EmailAddress
 from bor.config import get_config, load_mailrc_aliases
-from bor.editing import copy_to_clipboard, kill_input_line, kill_text_line
+from bor.editing import copy_to_clipboard, kill_input_line, kill_text_line, normalize_newlines
 
 
 # Custom messages for Ctrl+L commands
@@ -1291,7 +1291,7 @@ class ComposeWidget(BaseTab):
         header = f"\n\nOn {date_str}, {msg.from_addr} wrote:\n"
 
         # Quote original message
-        original = msg.body_txt or ""
+        original = normalize_newlines(msg.body_txt or "")
         quoted = "\n".join(f"> {line}" for line in original.split("\n"))
 
         body_input.text = header + quoted + "\n\n" + config.identity.signature
@@ -1394,8 +1394,8 @@ class ComposeWidget(BaseTab):
         header += f"Subject: {msg.subject}\n"
         header += f"To: {to_list}\n\n"
 
-        original_txt = msg.body_txt or ""
-        original_html = msg.body_html or ""
+        original_txt = normalize_newlines(msg.body_txt or "")
+        original_html = normalize_newlines(msg.body_html or "")
 
         if original_txt and original_html:
             body_input.text = (
@@ -1521,7 +1521,7 @@ class ComposeWidget(BaseTab):
 
         # Set body
         body_input = self.query_one("#body-input", ComposeTextArea)
-        body_input.text = full_msg.body_txt or ""
+        body_input.text = normalize_newlines(full_msg.body_txt or "")
 
         # Remove the original draft so it doesn't remain in Drafts
         self._delete_original_draft(msg)

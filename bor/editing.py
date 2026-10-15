@@ -33,9 +33,23 @@ def kill_input_line(value: str, cursor_position: int) -> tuple[str, int, str]:
     return value[:cursor_position], cursor_position, killed_text
 
 
+def normalize_newlines(text: str) -> str:
+    """Convert CRLF and CR line endings to LF.
+
+    Text on the wire is CRLF, but the editor works in LF; a stray CR lands
+    between the cursor and the newline and breaks line-based editing.
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def kill_text_line(text: str, cursor_index: int) -> tuple[str, int, str]:
     """Kill from the cursor to the end of the current line, emacs-style."""
     cursor_index = max(0, min(cursor_index, len(text)))
+
+    # A CR immediately before an LF is part of the line separator; kill both.
+    if text[cursor_index : cursor_index + 2] == "\r\n":
+        killed_text = "\r\n"
+        return text[:cursor_index] + text[cursor_index + 2 :], cursor_index, killed_text
 
     if cursor_index == len(text) and cursor_index > 0 and text[cursor_index - 1] == "\n":
         killed_text = "\n"

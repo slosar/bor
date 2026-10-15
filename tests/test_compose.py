@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 import bor.tabs.compose as compose_module
-from bor.editing import kill_input_line, kill_text_line
+from bor.editing import kill_input_line, kill_text_line, normalize_newlines
 from bor.mu import EmailMessage, EmailAddress
 from bor.tabs.compose import ComposeWidget, AddressInput, ComposeTextArea, FilePathInput
 import email.utils
@@ -465,6 +465,56 @@ def test_kill_text_line_kills_trailing_empty_line() -> None:
     assert text == "alpha"
     assert cursor == 5
     assert killed == "\n"
+
+
+def test_kill_text_line_kills_crlf_separator_at_end_of_line() -> None:
+    """Ctrl+K at end of a CRLF line should kill the whole \\r\\n, not just the CR."""
+    text, cursor, killed = kill_text_line("alpha\r\nbeta", 5)
+    assert text == "alphabeta"
+    assert cursor == 5
+    assert killed == "\r\n"
+
+
+def test_kill_text_line_kills_crlf_empty_line() -> None:
+    """Ctrl+K on an empty CRLF line should delete that line in one press."""
+    text, cursor, killed = kill_text_line("alpha\r\n\r\nbeta", 7)
+    assert text == "alpha\r\nbeta"
+    assert cursor == 7
+    assert killed == "\r\n"
+
+
+def test_normalize_newlines_converts_crlf_and_cr() -> None:
+    """Wire-format CRLF and lone CR line endings should become plain LF."""
+    assert normalize_newlines("a\r\nb\rc\nd") == "a\nb\nc\nd"
+
+
+def test_compose_kill_line_handles_crlf_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Repeated Ctrl+K in CRLF editor text should behave like LF text."""
+    monkeypatch.setattr(compose_module, "copy_to_clipboard", lambda *a, **k: None)
+
+    editor = ComposeTextArea()
+    editor.text = "alpha\r\nbeta\r\n"
+    editor.cursor_location = (0, 0)
+
+    editor._kill_line_at_cursor()
+    editor._kill_line_at_cursor()
+    editor._kill_line_at_cursor()
+    editor._kill_line_at_cursor()
+
+    assert editor.text == ""
+
+
+def test_compose_kill_line_at_end_of_crlf_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ctrl+K at the end of a CRLF line should join lines in one press."""
+    monkeypatch.setattr(compose_module, "copy_to_clipboard", lambda *a, **k: None)
+
+    editor = ComposeTextArea()
+    editor.text = "alpha\r\nbeta"
+    editor.cursor_location = (0, 5)
+
+    editor._kill_line_at_cursor()
+
+    assert editor.text == "alphabeta"
 
 
 def test_compose_kill_line_appends_consecutive_kills_to_clipboard(
