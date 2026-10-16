@@ -840,6 +840,14 @@ class FilePathInput(Input):
         shared_prefix = os.path.commonprefix(completions)
         if shared_prefix.startswith(path_str):
             return shared_prefix
+
+        # Matching was case-insensitive, so fall back to a case-insensitive
+        # shared prefix, preserving the casing of the actual file names.
+        insensitive_prefix = os.path.commonprefix([c.lower() for c in completions])
+        if len(insensitive_prefix) > len(shared_prefix) and insensitive_prefix.startswith(
+            path_str.lower()
+        ):
+            return completions[0][: len(insensitive_prefix)]
         return path_str
 
     def on_key(self, event: events.Key) -> None:

@@ -581,6 +581,19 @@ def test_file_path_completion_extends_to_shared_prefix() -> None:
     assert completed == "/tmp/alp"
 
 
+def test_file_path_completion_extends_case_insensitive_shared_prefix() -> None:
+    """Tab should extend to the shared prefix even when match casing differs."""
+    completed = FilePathInput._longest_shared_completion_prefix(
+        "/home/anze/Downloads/LN_Up",
+        [
+            "/home/anze/Downloads/LN_Updates_260813.pdf",
+            "/home/anze/Downloads/LN_Updates_Oct26.pdf",
+            "/home/anze/Downloads/LN_updates_260612.pdf",
+        ],
+    )
+    assert completed == "/home/anze/Downloads/LN_Updates_"
+
+
 def test_file_path_completion_keeps_input_when_matches_diverge() -> None:
     """Tab should leave the input unchanged when matches share no extra prefix."""
     completed = FilePathInput._longest_shared_completion_prefix(

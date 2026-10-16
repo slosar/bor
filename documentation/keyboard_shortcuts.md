@@ -185,6 +185,7 @@ In body:
 
 In attachment path input:
 - Press Tab to complete file/folder names
+- Matching is case-insensitive; with multiple matches the input extends to the longest shared prefix (keeping the actual file casing) and the matches are listed
 - Starts from home directory, remembers last used folder
 
 ## Sync Tab

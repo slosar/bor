@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.1]
 
 ### Fixed
+- Fixed file-path Tab completion (e.g. the compose attachment prompt) not extending the input to the longest shared prefix when matching files differ only in case. Matching is case-insensitive, but the shared-prefix computation was case-sensitive, so typing `LN_Up` with both `LN_Updates_…` and `LN_updates_…` present collapsed the common prefix below the typed text and Tab only listed completions without filling anything in. The shared prefix is now computed case-insensitively while preserving the actual file casing.
 - Fixed `Ctrl+K` in the compose editor appearing broken when replying to messages with CRLF (Windows-style) line endings. Textual treats `\r\n` as one line separator, so the cursor index landed on the invisible `\r` and the first kill removed only that character — the line break survived until a second press. Reply quotes, forwarded bodies, and drafts are now normalized to LF when loaded into the editor, pasted clipboard text is normalized too, and `kill_text_line` treats a remaining `\r\n` at the cursor as a single line break.
 - Read the mail root from `mu info store` so archiving uses the configured Maildir with mu 1.14.
 - Use mu's Unix timestamp and UTC offset to display message dates in the sender's timezone.
