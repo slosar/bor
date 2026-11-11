@@ -149,7 +149,48 @@ class SearchInput(Input):
             super().__init__()
 
 
-class ConfirmBar(Static):
+class PromptBar(Static):
+    """Base for the one-line prompts docked at the bottom of a tab.
+
+    Showing a prompt takes focus; answering or dismissing it hands focus back
+    to whatever had it before, falling back to the message table.
+    """
+
+    can_focus = True
+
+    def __init__(self, *args, **kwargs) -> None:
+        """Initialize the prompt bar."""
+        super().__init__(*args, **kwargs)
+        self._previous_focus: Widget | None = None
+
+    def _open(self, text: str) -> None:
+        """Show the prompt and take focus."""
+        self._previous_focus = self.app.focused
+        self.update(text)
+        self.add_class("visible")
+        self.focus()
+
+    def _close(self) -> None:
+        """Hide the prompt and return focus."""
+        self.remove_class("visible")
+        self._restore_focus()
+
+    def _restore_focus(self) -> None:
+        """Return focus to the widget that opened the prompt."""
+        try:
+            if self._previous_focus is not None and self._previous_focus is not self:
+                self._previous_focus.focus()
+                return
+        except Exception:
+            pass
+
+        try:
+            self.screen.query_one(DataTable).focus()
+        except Exception:
+            pass
+
+
+class ConfirmBar(PromptBar):
     """Confirmation bar widget for y/n prompts."""
 
     DEFAULT_CSS = """
@@ -172,38 +213,27 @@ class ConfirmBar(Static):
         """Initialize confirmation bar."""
         super().__init__(*args, **kwargs)
         self._callback: Callable | None = None
-        self._prompt: str = ""
 
     def ask(self, prompt: str, callback: Callable) -> None:
         """Show confirmation prompt."""
-        self._prompt = prompt
         self._callback = callback
-        self.update(f"{prompt} (y/n)")
-        self.add_class("visible")
-        self.focus()
+        self._open(f"{prompt} (y/n)")
 
     def on_key(self, event: events.Key) -> None:
         """Handle key events."""
         if event.key in ("y", "Y"):
-            self.remove_class("visible")
+            self._close()
             if self._callback:
                 self._callback()
             event.prevent_default()
             event.stop()
         elif event.key in ("n", "N", "escape"):
-            self.remove_class("visible")
-            # Return focus to table
-            try:
-                self.screen.query_one(DataTable).focus()
-            except Exception:
-                pass
+            self._close()
             event.prevent_default()
             event.stop()
 
-    can_focus = True
 
-
-class ReplyBar(Static):
+class ReplyBar(PromptBar):
     """Reply options bar widget for (a)ll or (s)ender only choices."""
 
     DEFAULT_CSS = """
@@ -227,45 +257,25 @@ class ReplyBar(Static):
         super().__init__(*args, **kwargs)
         self._callback: Callable | None = None
         self._cancel_callback: Callable[[], None] | None = None
-        self._previous_focus: Widget | None = None
 
     def ask(self, callback: Callable, cancel_callback: Callable[[], None] | None = None) -> None:
         """Show reply options prompt."""
         self._callback = callback
         self._cancel_callback = cancel_callback
-        self._previous_focus = self.app.focused
-        self.update("Reply to: (a)ll or (s)ender only?")
-        self.add_class("visible")
-        self.focus()
-
-    def _restore_focus(self) -> None:
-        """Return focus to the widget that opened the reply prompt."""
-        try:
-            if self._previous_focus is not None and self._previous_focus is not self:
-                self._previous_focus.focus()
-                return
-        except Exception:
-            pass
-
-        try:
-            self.screen.query_one(DataTable).focus()
-        except Exception:
-            pass
+        self._open("Reply to: (a)ll or (s)ender only?")
 
     def on_key(self, event: events.Key) -> None:
         """Handle key events."""
         key = event.key.lower() if event.key else ""
 
         if key in ("a", "s"):
-            self.remove_class("visible")
-            self._restore_focus()
+            self._close()
             if self._callback:
                 self._callback(key == "a")  # True for reply all, False for sender only
             self._callback = None
             self._cancel_callback = None
         elif key == "escape":
-            self.remove_class("visible")
-            self._restore_focus()
+            self._close()
             if self._cancel_callback:
                 self._cancel_callback()
             self._callback = None
@@ -274,10 +284,8 @@ class ReplyBar(Static):
         event.prevent_default()
         event.stop()
 
-    can_focus = True
 
-
-class FlagBar(Static):
+class FlagBar(PromptBar):
     """Flag selection bar widget for applying flags to messages."""
 
     DEFAULT_CSS = """
@@ -304,11 +312,9 @@ class FlagBar(Static):
     def ask(self, callback: Callable) -> None:
         """Show flag selection prompt."""
         self._callback = callback
-        self.update(
+        self._open(
             "Apply flag: (U)nread, (N)ew, (F)lagged | Shift+key to remove flag | (Esc) Cancel"
         )
-        self.add_class("visible")
-        self.focus()
 
     def on_key(self, event: events.Key) -> None:
         """Handle key events."""
@@ -317,26 +323,19 @@ class FlagBar(Static):
 
         # Check for shift+key (uppercase) to remove flag
         if char in ("U", "N", "F"):
-            self.remove_class("visible")
+            self._close()
             if self._callback:
                 # Pass uppercase to indicate removal
                 self._callback(char)
         elif key in ("u", "n", "f"):
-            self.remove_class("visible")
+            self._close()
             if self._callback:
                 self._callback(key)
         elif key == "escape":
-            self.remove_class("visible")
-            # Return focus to table
-            try:
-                self.screen.query_one(DataTable).focus()
-            except Exception:
-                pass
+            self._close()
 
         event.prevent_default()
         event.stop()
-
-    can_focus = True
 
 
 def apply_flag(mu: MuInterface, path: str, flags: list[str], flag_key: str) -> None:

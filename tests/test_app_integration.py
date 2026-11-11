@@ -779,6 +779,37 @@ class TestQuit:
         assert len(errors) == 2
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("keys", [("x", "n"), ("d", "escape"), ("a", "escape")])
+    async def test_declining_prompt_in_message_view_stays_in_view(self, mock_config, keys):
+        """Answering no to a prompt in the message view must not jump to the index."""
+        from textual.widgets import TabbedContent
+
+        from bor.tabs.message import MessageViewWidget
+
+        mu = self._mailbox_mu()
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mu):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    view = app.query_one(MessageViewWidget)
+                    focused_before = app.focused
+
+                    await pilot.press(*keys)
+                    await pilot.pause()
+
+                    assert app.query_one(TabbedContent).active == view.get_tab_id()
+                    assert app.focused is focused_before
+                    await pilot.press("n")
+                    await pilot.pause()
+                    assert view._message_ref.path == "/test/path/message1"
+                    mu.move.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_ctrl_q_quits(self, mock_mu_interface, mock_config):
         """Test that Ctrl+Q quits the application."""
         with patch('bor.app.get_config', return_value=mock_config):
