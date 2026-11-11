@@ -692,3 +692,37 @@ def test_send_keeps_bcc_out_of_transmitted_headers(monkeypatch: pytest.MonkeyPat
     assert sent["to_addrs"] == ["to@example.com", "secret@example.com"]
     # The sent-folder copy keeps the Bcc header as a record
     assert "BCC: Secret <secret@example.com>" in saved[0]
+
+
+@pytest.mark.parametrize(
+    ("name", "content_type"),
+    [
+        ("My Report.pdf", "application/pdf"),
+        ("Čestitka; final.txt", "text/plain"),
+        ("archive.tar.gz", "application/octet-stream"),
+        ("no-extension", "application/octet-stream"),
+    ],
+)
+def test_attachment_part_round_trips_filename_and_type(
+    tmp_path: Path, name: str, content_type: str
+) -> None:
+    """Names with spaces, semicolons or non-ASCII survive; the type is guessed."""
+    from email import policy
+    from email.parser import BytesParser
+
+    path = tmp_path / name
+    path.write_bytes(b"data")
+    msg = MIMEMultipart("mixed")
+    msg.attach(ComposeWidget._attachment_part(path))
+
+    parsed = BytesParser(policy=policy.default).parsebytes(msg.as_bytes())
+    part = next(parsed.iter_attachments())
+
+    assert part.get_filename() == name
+    assert part.get_content_type() == content_type
+    assert part.get_content() == b"data" or part.get_content() == "data"
+
+
+def test_unreadable_attachment_raises(tmp_path: Path) -> None:
+    with pytest.raises(OSError, match="Cannot read attachment .*gone.pdf"):
+        ComposeWidget._attachment_part(tmp_path / "gone.pdf")

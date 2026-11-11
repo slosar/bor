@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import email.utils
+import mimetypes
 import os
 import re
 import shutil
@@ -1668,21 +1669,39 @@ class ComposeWidget(BaseTab):
         body = self.query_one("#body-input", ComposeTextArea).text
         msg.attach(MIMEText(body, "plain", "utf-8"))
 
-        # Add attachments
+        # Add attachments. A file that cannot be read raises, so the caller
+        # reports it instead of sending or saving the message without it.
         for attachment_path in self.attachments:
-            try:
-                with open(attachment_path, "rb") as f:
-                    part = MIMEBase("application", "octet-stream")
-                    part.set_payload(f.read())
-                    encoders.encode_base64(part)
-                    part.add_header(
-                        "Content-Disposition", f"attachment; filename={attachment_path.name}"
-                    )
-                    msg.attach(part)
-            except Exception:
-                pass
+            msg.attach(self._attachment_part(attachment_path))
 
         return msg
+
+    @staticmethod
+    def _attachment_part(path: Path) -> MIMEBase:
+        """Build the MIME part for an attached file.
+
+        The type is guessed from the file name so recipients can preview it,
+        and the name is passed as a header parameter so it is quoted, and
+        RFC 2231-encoded when not ASCII ("My Report.pdf", "Čestitka.pdf").
+
+        Raises:
+            OSError: If the file cannot be read.
+        """
+        try:
+            data = path.read_bytes()
+        except OSError as error:
+            raise OSError(f"Cannot read attachment {path}: {error.strerror or error}") from error
+
+        content_type, encoding = mimetypes.guess_type(path.name)
+        if content_type is None or encoding is not None:
+            content_type = "application/octet-stream"
+        maintype, subtype = content_type.split("/", 1)
+
+        part = MIMEBase(maintype, subtype, name=path.name)
+        part.set_payload(data)
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", "attachment", filename=path.name)
+        return part
 
     def _send_message(self) -> bool:
         """
@@ -1784,21 +1803,21 @@ class ComposeWidget(BaseTab):
         Returns:
             True if successful
         """
-        if msg is None:
-            msg = self._build_message()
-
-        root = self.bor_app.mu.get_root_maildir()
-        target_dir = Path(root) / folder.lstrip("/") / "cur"
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-        # Generate maildir-style filename
-        timestamp = int(datetime.now().timestamp())
-        hostname = os.uname().nodename
-        filename = f"{timestamp}.{os.getpid()}.{hostname}:2,S"
-
-        target_path = target_dir / filename
-
         try:
+            if msg is None:
+                msg = self._build_message()
+
+            root = self.bor_app.mu.get_root_maildir()
+            target_dir = Path(root) / folder.lstrip("/") / "cur"
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            # Generate maildir-style filename
+            timestamp = int(datetime.now().timestamp())
+            hostname = os.uname().nodename
+            filename = f"{timestamp}.{os.getpid()}.{hostname}:2,S"
+
+            target_path = target_dir / filename
+
             with open(target_path, "w") as f:
                 f.write(msg.as_string())
             self.bor_app.mu.queue_reindex(added=str(target_path))

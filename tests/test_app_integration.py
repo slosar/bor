@@ -748,6 +748,37 @@ class TestQuit:
                     assert len(app._tabs) == 0
 
     @pytest.mark.asyncio
+    async def test_missing_attachment_stops_send_and_draft(
+        self, mock_mu_interface, mock_config, tmp_path
+    ):
+        """A vanished attachment is reported; the message is not sent without it."""
+        mock_mu_interface.get_root_maildir.return_value = str(tmp_path / "Mail")
+        sendmail = MagicMock()
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                with patch('bor.tabs.compose.smtplib.SMTP') as smtp:
+                    smtp.return_value.sendmail = sendmail
+                    from bor.app import BorApp
+
+                    app = BorApp()
+                    async with app.run_test() as pilot:
+                        await pilot.pause()
+                        await pilot.press("c")
+                        await pilot.pause()
+                        compose = app.query_one(ComposeWidget)
+                        compose.query_one("#to-input").value = "to@example.com"
+                        compose.attachments = [tmp_path / "gone.pdf"]
+                        with patch.object(ComposeWidget, "notify") as notify:
+                            assert compose._send_message() is False
+                            assert compose._save_draft() is False
+
+        sendmail.assert_not_called()
+        assert not (tmp_path / "Mail").exists()
+        errors = [call.args[0] for call in notify.call_args_list]
+        assert any("gone.pdf" in error for error in errors)
+        assert len(errors) == 2
+
+    @pytest.mark.asyncio
     async def test_ctrl_q_quits(self, mock_mu_interface, mock_config):
         """Test that Ctrl+Q quits the application."""
         with patch('bor.app.get_config', return_value=mock_config):
