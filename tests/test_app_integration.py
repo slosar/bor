@@ -972,6 +972,23 @@ class TestQuit:
                     assert app.focused.id == "body-input"
 
     @pytest.mark.asyncio
+    async def test_home_and_end_move_to_first_and_last_message(self, mock_mu_interface, mock_config):
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    table = app.query_one(DataTable)
+                    await pilot.press("end")
+                    await pilot.pause()
+                    assert table.cursor_row == 4
+                    await pilot.press("home")
+                    await pilot.pause()
+                    assert table.cursor_row == 0
+
+    @pytest.mark.asyncio
     async def test_ctrl_q_quits(self, mock_mu_interface, mock_config):
         """Test that Ctrl+Q quits the application."""
         with patch('bor.app.get_config', return_value=mock_config):

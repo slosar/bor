@@ -338,6 +338,22 @@ class FlagBar(PromptBar):
         event.stop()
 
 
+class MessageTable(DataTable):
+    """The message list table, where Home/End go to the first/last message.
+
+    DataTable binds Home/End to horizontal scrolling. As the focused widget
+    its bindings win, so the index's own Home/End bindings never ran.
+    """
+
+    def action_scroll_home(self) -> None:
+        """Move the cursor to the first message."""
+        self.action_scroll_top()
+
+    def action_scroll_end(self) -> None:
+        """Move the cursor to the last message."""
+        self.action_scroll_bottom()
+
+
 def apply_flag(mu: MuInterface, path: str, flags: list[str], flag_key: str) -> None:
     """Apply a FlagBar choice to a message file and its in-memory flag list.
 
@@ -503,7 +519,7 @@ class MessageIndexWidget(BaseTab):
         with Vertical():
             with Container(classes="search-bar", id="search-bar"):
                 yield SearchInput(id="search-input")
-            yield DataTable(id="message-table", cursor_type="row")
+            yield MessageTable(id="message-table", cursor_type="row")
             yield ConfirmBar("", classes="confirm-bar", id="confirm-bar")
             yield FlagBar("", id="flag-bar")
             yield ReplyBar("", id="reply-bar")
