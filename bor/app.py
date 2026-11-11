@@ -182,6 +182,10 @@ class BorApp(App):
             self.notify(
                 warning, title="Configuration", severity="warning", timeout=15, markup=False
             )
+        from bor.tabs.message_index import MessageIndexWidget
+
+        index = self.query_one(MessageIndexWidget)
+        self.llm.index_state = index.llm_view_state
         # Load inbox by default, then focus
         self.call_later(self._load_inbox)
 

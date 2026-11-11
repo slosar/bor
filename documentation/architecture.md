@@ -138,7 +138,10 @@ nothing changes the mailbox.
   `max_tool_calls`, and rolls the history back if a question fails or is
   cancelled.
 - `prompt.py` - The system prompt (identity, folders, mu query cheat sheet, the
-  user's notes file) and the context block sent with each question.
+  user's notes file) and the `<bor_context>` block sent with each question: the
+  time, and from the index (`MessageIndexWidget.llm_view_state()`, read through
+  `LLMSession.index_state`) the current view, the cursor message and the marked
+  messages, each given a handle.
 - `session.py` - `LLMSession` on `BorApp.llm`: API key lookup, the conversation,
   handles and transcript, so they outlive the LLM tab, and the result set
   (`results`, `results_title`), which also outlives the conversation. `make_client()` builds the

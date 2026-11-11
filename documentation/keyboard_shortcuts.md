@@ -92,6 +92,11 @@ In the search prompt:
 | Q | Open the LLM tab (or switch to it) to ask about your mail |
 | K | Show the LLM results: the messages the model last picked for a search or summary |
 | Shift+K | Clear the LLM results (and return to the previous search) |
+| Ctrl+S | Ask the LLM to summarize the marked messages and say which need a reply (the message under the cursor if none is marked) |
+
+Every question also tells the model what the index shows, the message under the
+cursor and the messages marked with `M`, so you can ask about "this message" or
+"the marked ones" from the LLM tab too.
 
 The LLM results stay until cleared or replaced by the model's next set; other
 searches and folders (`S`, `I`/`O`/`U`) leave them in place for the next `K`.

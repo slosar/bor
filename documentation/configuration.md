@@ -241,6 +241,9 @@ context_file = "~/.config/bor/llm.md"
 
 # Tool calls (searches and reads) allowed while answering one question
 max_tool_calls = 30
+
+# The question Ctrl+S in the message index asks about the marked messages
+summarize_prompt = "Summarize the marked messages and tell me which ones need a response from me."
 ```
 
 The model can only search and read mail: it cannot send, move, flag or change

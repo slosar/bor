@@ -633,6 +633,12 @@ def _results_mu(inbox):
         return list(inbox)
 
     mu.find.side_effect = find
+
+    def view(path, mark_as_read=True, msgid=""):
+        base = next(m for m in inbox if m.path == path)
+        return EmailMessage(**{**base.__dict__, "body_txt": f"Body of {base.subject}"})
+
+    mu.view.side_effect = view
     return mu
 
 
@@ -728,3 +734,84 @@ async def test_folder_keys_leave_the_results_view(tmp_path: Path) -> None:
                 assert "LLM" not in _status(app)
                 # The set itself is kept for the next k
                 assert app.llm.results == ["id1@example.org"]
+
+
+# ----------------------------------------------------------------------
+# Marked messages and Ctrl+S
+
+
+async def test_ctrl_s_summarizes_the_marked_messages(tmp_path: Path) -> None:
+    inbox = [_message(n) for n in range(1, 5)]
+    client = FakeClient([tool_response("read_message", {"id": "m2"}), text_response("Summary.")])
+    config = _llm_config(tmp_path)
+    with patch("bor.app.get_config", return_value=config):
+        with patch("bor.app.MuInterface", return_value=_results_mu(inbox)):
+            with patch("bor.llm.session.make_client", return_value=client):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await _settle(pilot, app)
+                    await pilot.press("m", "m")  # mark the first two; cursor moves to the third
+                    await pilot.press("ctrl+s")
+                    await _settle(pilot, app)
+
+                    sent = client.requests[0]["messages"][1]["content"]
+                    context, question = sent.split("</bor_context>\n\n")
+                    assert question == config.llm.summarize_prompt
+                    lines = context.splitlines()
+                    assert lines[2] == "Bor's message index shows: Inbox (maildir:\"/INBOX\"), 4 messages"
+                    assert lines[3].startswith("Message under the cursor: m1 | 2025-03-03")
+                    assert lines[4] == "Marked messages (2):"
+                    assert lines[5].startswith("m2 | 2025-03-01") and "Subject 1" in lines[5]
+                    assert lines[6].startswith("m3 | 2025-03-02") and "Subject 2" in lines[6]
+
+                    # The model can read a marked message through its handle
+                    tool_line = next(e for e in app.llm.transcript if e.kind.startswith("tool"))
+                    assert tool_line.kind == "tool"
+                    assert tool_line.text.startswith('read: "Subject 1"')
+                    assert app.query_one("TabbedContent").active != "tab-0"
+
+
+async def test_ctrl_s_without_marks_uses_the_cursor_message(tmp_path: Path) -> None:
+    inbox = [_message(n) for n in range(1, 3)]
+    client = FakeClient([text_response("Summary.")])
+    with patch("bor.app.get_config", return_value=_llm_config(tmp_path)):
+        with patch("bor.app.MuInterface", return_value=_results_mu(inbox)):
+            with patch("bor.llm.session.make_client", return_value=client):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await _settle(pilot, app)
+                    await pilot.press("ctrl+s")
+                    await _settle(pilot, app)
+
+                    sent = client.requests[0]["messages"][1]["content"]
+                    assert "Marked messages: none" in sent
+                    assert "Message under the cursor: m1 | 2025-03-01" in sent
+                    assert sent.endswith("(Nothing is marked: use the message under the cursor.)")
+
+
+async def test_context_describes_searches_threads_and_results(tmp_path: Path) -> None:
+    inbox = [_message(n) for n in range(1, 4)]
+    with patch("bor.app.get_config", return_value=_llm_config(tmp_path)):
+        with patch("bor.app.MuInterface", return_value=_results_mu(inbox)):
+            from bor.app import BorApp
+            from bor.tabs.message_index import MessageIndexWidget
+
+            app = BorApp()
+            async with app.run_test() as pilot:
+                await _settle(pilot, app)
+                index = app.query_one(MessageIndexWidget)
+
+                await index.search("from:alice [ext]")
+                assert index.llm_view_state()[0] == "search: from:alice [ext], 3 messages"
+
+                app.llm.set_results(["id2@example.org"], "Picked")
+                await index.show_llm_results()
+                assert index.llm_view_state()[0] == 'LLM results "Picked", 1 messages'
+
+                app.mu.find_thread = MagicMock(return_value=inbox[:2])
+                await index._show_thread(inbox[0])
+                assert index.llm_view_state()[0] == 'the thread "Subject 1", 2 messages'

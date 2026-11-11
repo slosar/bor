@@ -148,6 +148,7 @@ bor
 | L | Sync |
 | Q | Ask the LLM about your mail |
 | K / Shift+K | Show / clear the messages the LLM picked |
+| Ctrl+S | LLM: summarize the marked messages |
 | Z | Undo move |
 | Ctrl+R | Refresh index |
 

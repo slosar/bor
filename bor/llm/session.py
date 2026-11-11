@@ -7,6 +7,7 @@ end the conversation; only Ctrl+N (new conversation) or quitting Bor does.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -15,12 +16,16 @@ from bor.config import Config
 from bor.llm.conversation import Conversation
 from bor.llm.prompt import build_system_prompt, question_with_context
 from bor.llm.tools import MailTools, MessageHandles
-from bor.mu import MuInterface
+from bor.mu import EmailMessage, MuInterface
 
 API_KEY_ENV = "OPENROUTER_API_KEY"
 KEYRING_SERVICE = "bor-llm"
 KEYRING_USER = "api_key"
 MAX_HISTORY = 100
+MAX_MARKED_IN_CONTEXT = 100
+
+# What the index shows: (description of the view, message under the cursor, marked messages)
+IndexState = tuple[str, "EmailMessage | None", list[EmailMessage]]
 
 
 def make_client(api_key: str, base_url: str) -> Any:
@@ -54,6 +59,8 @@ class LLMSession:
         self.history: list[str] = []  # questions asked, for Up/Down in the input
         self._conversation: Conversation | None = None
         self._api_key: str | None = None
+        # Set by the app: reads the message index's view, cursor and marks
+        self.index_state: Callable[[], IndexState] | None = None
 
     # ------------------------------------------------------------------
     # Setup
@@ -110,8 +117,32 @@ class LLMSession:
     # Questions
 
     def prepare_question(self, question: str) -> str:
-        """The message actually sent: the question with Bor's current context."""
-        return question_with_context(question, [], datetime.now())
+        """The message actually sent: the question with Bor's current context.
+
+        Call on the UI thread, when no question is running: it reads the index
+        and gives the cursor and marked messages handles the model can use.
+        """
+        return question_with_context(question, self._index_context(), datetime.now())
+
+    def _index_context(self) -> list[str]:
+        if self.index_state is None:
+            return []
+        try:
+            view, cursor, marked = self.index_state()
+        except Exception:
+            return []
+        lines = [f"Bor's message index shows: {view}"]
+        if cursor is not None:
+            lines.append(f"Message under the cursor: {self.tools.summary_line(cursor)}")
+        if not marked:
+            lines.append("Marked messages: none")
+            return lines
+        shown = marked[:MAX_MARKED_IN_CONTEXT]
+        lines.append(f"Marked messages ({len(marked)}):")
+        lines += [self.tools.summary_line(msg) for msg in shown]
+        if len(marked) > len(shown):
+            lines.append(f"[{len(marked) - len(shown)} more marked messages not listed]")
+        return lines
 
     def remember(self, question: str) -> None:
         """Add a question to the input history (most recent last, no duplicates)."""

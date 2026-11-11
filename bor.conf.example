@@ -121,5 +121,7 @@ base_url = "https://openrouter.ai/api/v1"
 # Your glossary/notes for the model
 context_file = "~/.config/bor/llm.md"
 max_tool_calls = 30
+# Question asked by Ctrl+S in the index about the marked messages
+# summarize_prompt = "Summarize the marked messages and tell me which ones need a response from me."
 
 # [editor] external = "..." is accepted but not implemented yet.

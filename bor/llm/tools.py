@@ -231,7 +231,7 @@ class MailTools:
         if not found:
             content = "No messages match. (A malformed query also returns nothing.)"
         else:
-            lines = [self._summary_line(msg) for msg in found]
+            lines = [self.summary_line(msg) for msg in found]
             note = " (more match: narrow the query or raise limit)" if more else ""
             content = f"{len(found)} messages{note}:\n" + "\n".join(lines)
         count = f"{len(found)}{'+' if more else ''}"
@@ -264,10 +264,10 @@ class MailTools:
             try:
                 full = self._view(item)
             except ToolError as e:
-                parts.append(f"=== {self._summary_line(item)} ===\n[{e}]")
+                parts.append(f"=== {self.summary_line(item)} ===\n[{e}]")
                 continue
             body = _cap(message_body_text(full, keep_quoted=False), per_message)
-            parts.append(f"=== {self._summary_line(item, item_handle)} ===\n{body}")
+            parts.append(f"=== {self.summary_line(item, item_handle)} ===\n{body}")
         content = f"Thread of {len(thread) + omitted} messages:\n\n" + "\n\n".join(parts)
         total = len(thread) + omitted
         return ToolResult(content, f"thread: {_describe(msg)} → {_count(total)}")
@@ -316,7 +316,7 @@ class MailTools:
             raise ToolError(f"message {msg.subject!r} could not be read (moved or deleted?)")
         return full
 
-    def _summary_line(self, msg: EmailMessage, handle: str | None = None) -> str:
+    def summary_line(self, msg: EmailMessage, handle: str | None = None) -> str:
         handle = handle or self.handles.handle_for(msg)
         recipients = _short_addresses(msg.to_addrs)
         sender = _address(msg.from_addr)

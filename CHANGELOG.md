@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **LLM mail assistant.** `Q` in the message index opens an LLM tab where you ask about your mail in plain language ("summarize the emails about the job search"). The model searches with mu queries and reads messages and whole threads through read-only tools, showing each step, then answers in Markdown with the token use and cost. It works with any OpenAI-compatible API; the default is OpenRouter with `moonshotai/kimi-k2.6`. Configure it in the new `[llm]` section (API key, model, endpoint, a notes file with your own glossary, tool-call limit); install with `pip install 'bormail[llm]'`. Reading mail for the model does not mark it read.
 - **LLM results view.** When the model answers a search, or summarizes, it publishes the messages it used; `K` in the message index shows them (status bar `LLM: <title>`), with threading, marking, reply and archive working as usual. The set stays until the model replaces it or `Shift+K` clears it, which returns to the previous search.
+- **Marked messages for the LLM.** Each question tells the model what the index shows, the message under the cursor and the messages marked with `M`, so "summarize the marked messages" or "do I need to answer this one?" work from the LLM tab. `Ctrl+S` in the index asks the configurable `[llm] summarize_prompt` (summarize the marked messages and say which need a response) about the marked messages, or the one under the cursor.
 
 ## [1.1]
 

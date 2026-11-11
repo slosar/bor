@@ -437,6 +437,7 @@ class MessageIndexWidget(BaseTab):
         Binding("q", "open_llm", "Ask LLM"),
         Binding("k", "show_llm_results", "LLM Results"),
         Binding("K", "clear_llm_results", "Clear LLM Results", show=False),
+        Binding("ctrl+s", "summarize_marked", "Summarize Marked"),
         Binding("m", "mark_message", "Mark"),
         Binding("x", "archive", "Archive Msg"),
         Binding("a", "apply_flag", "Apply Flag"),
@@ -1192,6 +1193,34 @@ class MessageIndexWidget(BaseTab):
         self.app.notify("LLM results cleared.", markup=False)
         if self._llm_view:
             await self.search(self.current_query or self._inbox_query())
+
+    def llm_view_state(self) -> tuple[str, EmailMessage | None, list[EmailMessage]]:
+        """What the LLM is told about the index: the view, the cursor and the marks."""
+        if self._llm_view:
+            view = f'LLM results "{self.bor_app.llm.results_title}"'
+        elif self._thread_anchor is not None:
+            view = f'the thread "{self._thread_anchor.subject}"'
+        else:
+            folders = get_config().folders
+            names = {
+                f'maildir:"{folders.inbox}"': "Inbox",
+                f'maildir:"{folders.archive}"': "Archive",
+                f'maildir:"{folders.drafts}"': "Drafts",
+            }
+            query = self.current_query
+            view = f"{names[query]} ({query})" if query in names else f"search: {query}"
+        view += f", {len(self.messages)} messages"
+        marked = [self.messages[i] for i in sorted(self.marked_messages) if i < len(self.messages)]
+        return view, self._get_current_message(), marked
+
+    def action_summarize_marked(self) -> None:
+        """Ctrl+S: ask the LLM about the marked messages (or the one under the cursor)."""
+        question = get_config().llm.summarize_prompt
+        if not self.marked_messages:
+            if self._get_current_message() is None:
+                return
+            question += " (Nothing is marked: use the message under the cursor.)"
+        self.bor_app.open_llm(question)
 
     async def on_llm_results_changed(self) -> None:
         """The model showed a new set: refresh the list if it is showing the old one."""

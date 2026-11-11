@@ -149,6 +149,10 @@ class LLMConfig:
     context_file: str = "~/.config/bor/llm.md"
     # Tool calls allowed while answering one question
     max_tool_calls: int = 30
+    # Question sent by Ctrl+S in the message index
+    summarize_prompt: str = (
+        "Summarize the marked messages and tell me which ones need a response from me."
+    )
 
 
 @dataclass
