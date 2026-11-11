@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import email.utils
 import os
+import re
 import shutil
 import smtplib
 import tempfile
@@ -128,6 +129,18 @@ class AttachFilesFromDirectory(ComposeCommand):
     """Command to attach multiple files from a directory."""
 
     pass
+
+
+def _bracketed_msgids(value: str) -> list[str]:
+    """Return the Message-IDs in `value`, each in RFC 5322 `<id>` form.
+
+    Accepts a single bare or bracketed ID, or a References-style list
+    (`<a@x> <b@y>`, also without separating whitespace). mu and the message
+    parser hand us IDs without brackets, but In-Reply-To/References need them:
+    other mail clients, and mu itself, fail to thread replies otherwise.
+    """
+    ids = re.findall(r"<([^<>\s]+)>", value) or value.split()
+    return [f"<{mid.strip('<>')}>" for mid in ids if mid.strip("<>")]
 
 
 # Second key after Ctrl+L -> command posted to the ComposeWidget
@@ -1595,17 +1608,10 @@ class ComposeWidget(BaseTab):
             return ""
 
         chain: list[str] = []
-        seen: set[str] = set()
-
-        for ref in reply_to.references or []:
-            clean_ref = ref.strip()
-            if clean_ref and clean_ref not in seen:
-                chain.append(clean_ref)
-                seen.add(clean_ref)
-
-        parent_msgid = reply_to.msgid.strip()
-        if parent_msgid and parent_msgid not in seen:
-            chain.append(parent_msgid)
+        for value in [*(reply_to.references or []), reply_to.msgid]:
+            for msgid in _bracketed_msgids(value):
+                if msgid not in chain:
+                    chain.append(msgid)
 
         return " ".join(chain)
 
@@ -1649,9 +1655,9 @@ class ComposeWidget(BaseTab):
             msg["BCC"] = self._format_address_list(bcc)
 
         # Reply headers
-        if self.reply_to and self.reply_to.msgid:
-            parent_msgid = self.reply_to.msgid.strip()
-            msg["In-Reply-To"] = parent_msgid
+        parent_ids = _bracketed_msgids(self.reply_to.msgid) if self.reply_to else []
+        if parent_ids:
+            msg["In-Reply-To"] = parent_ids[0]
 
             references = self._compose_references(self.reply_to)
             if references:

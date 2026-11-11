@@ -658,6 +658,26 @@ class TestQuit:
     """Test quit functionality."""
 
     @pytest.mark.asyncio
+    async def test_reply_headers_use_bracketed_message_ids(self, mock_mu_interface, mock_config):
+        """Replies carry RFC 5322 <id> Message-IDs even though mu.view() strips the brackets."""
+        mock_mu_interface.view.return_value = MockEmailMessage(
+            msgid="parent@example.com", references=["<root@example.com>"]
+        )
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("r")
+                    await pilot.pause()
+                    msg = app.query_one(ComposeWidget)._build_message()
+
+        assert msg["In-Reply-To"] == "<parent@example.com>"
+        assert msg["References"] == "<root@example.com> <parent@example.com>"
+
+    @pytest.mark.asyncio
     async def test_ctrl_q_quits(self, mock_mu_interface, mock_config):
         """Test that Ctrl+Q quits the application."""
         with patch('bor.app.get_config', return_value=mock_config):

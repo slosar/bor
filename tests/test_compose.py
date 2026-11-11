@@ -39,6 +39,30 @@ def test_compose_references_deduplicates_ids() -> None:
     assert references == "<parent@id> <root@id>"
 
 
+def test_compose_references_brackets_bare_message_ids() -> None:
+    """mu.view() strips <> from Message-IDs; References must restore them."""
+    parent = EmailMessage(msgid="parent@id", references=["<root@id>", "mid@id"])
+
+    references = ComposeWidget._compose_references(parent)
+
+    assert references == "<root@id> <mid@id> <parent@id>"
+
+
+def test_compose_references_splits_unspaced_ids_and_dedupes() -> None:
+    """Message-IDs may be run together; bare and bracketed forms are the same ID."""
+    parent = EmailMessage(msgid="parent@id", references=["<root@id><parent@id>"])
+
+    references = ComposeWidget._compose_references(parent)
+
+    assert references == "<root@id> <parent@id>"
+
+
+def test_bracketed_msgids() -> None:
+    assert compose_module._bracketed_msgids("a@x") == ["<a@x>"]
+    assert compose_module._bracketed_msgids(" <a@x> ") == ["<a@x>"]
+    assert compose_module._bracketed_msgids("") == []
+
+
 def test_compose_widget_does_not_bind_ctrl_a_to_attach() -> None:
     """Ctrl+A is reserved for focused text inputs; attachment uses Ctrl+L A."""
     binding_keys = {binding.key for binding in ComposeWidget.BINDINGS}
