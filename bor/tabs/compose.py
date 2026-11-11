@@ -1816,6 +1816,7 @@ class ComposeWidget(BaseTab):
         try:
             with open(target_path, "w") as f:
                 f.write(msg.as_string())
+            self.bor_app.mu.queue_reindex(added=str(target_path))
             return True
         except Exception as e:
             self.notify(f"Error saving: {e}", severity="error")

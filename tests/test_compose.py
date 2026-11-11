@@ -1,12 +1,15 @@
+import email.utils
+from email.mime.multipart import MIMEMultipart
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, PropertyMock
 
 import pytest
 
 import bor.tabs.compose as compose_module
 from bor.editing import kill_input_line, kill_text_line, normalize_newlines
-from bor.mu import EmailMessage, EmailAddress
-from bor.tabs.compose import ComposeWidget, AddressInput, ComposeTextArea, FilePathInput
-import email.utils
+from bor.mu import EmailAddress, EmailMessage
+from bor.tabs.compose import AddressInput, ComposeTextArea, ComposeWidget, FilePathInput
 
 
 def test_compose_references_appends_parent_msgid() -> None:
@@ -340,6 +343,24 @@ def test_reply_all_to_sent_message_keeps_original_to_out_of_cc() -> None:
     assert "Alice <alice@example.com>" in to_addrs
     assert "Bob <bob@example.com>" in to_addrs
     assert cc_addrs == ["Carol <carol@example.com>"]
+
+
+def test_save_to_folder_queues_message_for_reindexing(tmp_path: Path, monkeypatch) -> None:
+    """A saved message must be searchable without a manual full mu index."""
+    mu = Mock()
+    mu.get_root_maildir.return_value = str(tmp_path)
+    app = SimpleNamespace(mu=mu)
+    monkeypatch.setattr(ComposeWidget, "bor_app", PropertyMock(return_value=app))
+    widget = ComposeWidget()
+    message = MIMEMultipart()
+    message["Subject"] = "Recently sent"
+
+    assert widget._save_to_folder("/Archive", message)
+
+    mu.queue_reindex.assert_called_once()
+    saved_path = Path(mu.queue_reindex.call_args.kwargs["added"])
+    assert saved_path.parent == tmp_path / "Archive" / "cur"
+    assert "Subject: Recently sent" in saved_path.read_text(encoding="utf-8")
 
 
 def test_forward_attachments_keep_duplicate_names(tmp_path: Path) -> None:

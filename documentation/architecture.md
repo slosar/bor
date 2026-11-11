@@ -220,7 +220,14 @@ server.sendmail()
     │
     ▼
 Save to Sent folder
+    │
+    ▼
+Queue the new file with MuInterface.queue_reindex(added=...)
 ```
+
+The background reindex worker runs `mu add` for the saved file. Folder searches,
+including Archive, call `wait_for_reindex()` before `mu find`, so a newly sent
+message is searchable without requiring a manual full `mu index` refresh.
 
 ## Tab Management
 
