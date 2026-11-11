@@ -1923,9 +1923,30 @@ class ComposeWidget(BaseTab):
                 self.bor_app.mu.mark_replied(self.reply_to.path)
             elif self.forward:
                 self.bor_app.mu.mark_forwarded(self.forward.path)
+            elif self._draft_in_reply_to:
+                # An edited draft knows its parent only by Message-ID, and
+                # looking that up runs `mu find`.
+                await asyncio.to_thread(self._mark_parent_replied, self._draft_in_reply_to)
             self._retire_original_draft()
             self.notify("Message sent!")
             self.close_tab()
+
+    def _mark_parent_replied(self, parent_msgid: str) -> None:
+        """Flag the message an edited draft replied to. Runs on a worker thread.
+
+        The message has already been sent, so failures are ignored: an error
+        here must not make the send look failed and invite a second send.
+        """
+        mu = self.bor_app.mu
+        try:
+            # Pending flag changes (e.g. the parent just being read) rename
+            # its file; wait so mu returns the current path.
+            mu.wait_for_reindex()
+            parent = mu.find_by_msgid(parent_msgid)
+            if parent and parent.path:
+                mu.mark_replied(parent.path)
+        except Exception:
+            pass
 
     def on_save_draft(self, event: SaveDraft) -> None:
         """Handle save draft command."""

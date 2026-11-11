@@ -890,6 +890,76 @@ class TestQuit:
         saved = list((tmp_path / "Mail" / "Drafts" / "cur").iterdir())
         assert len(saved) == 1
 
+    async def _send_edited_draft(self, mu, mock_config):
+        """Open the mock draft with E, send it with Ctrl+L L; return (app, notify mock)."""
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mu):
+                with patch('bor.tabs.compose.smtplib.SMTP'):
+                    with patch.object(ComposeWidget, "notify") as notify:
+                        from bor.app import BorApp
+
+                        app = BorApp()
+                        async with app.run_test() as pilot:
+                            await pilot.pause()
+                            await pilot.press("e")
+                            await pilot.pause()
+                            await app.workers.wait_for_complete()
+                            app.query_one("#to-input").value = "to@example.com"
+                            await pilot.press("ctrl+l", "l")
+                            for _ in range(50):
+                                if not app._tabs:
+                                    break
+                                await pilot.pause(0.02)
+                            return app, notify
+
+    @pytest.mark.asyncio
+    async def test_sending_edited_reply_draft_marks_parent_replied(self, mock_config, tmp_path):
+        import threading
+
+        mu, draft = self._draft_mu(tmp_path)
+        parent = MockEmailMessage(path="/mail/INBOX/cur/parent:2,S", msgid="parent@example.com")
+        lookup_threads = []
+
+        def find_by_msgid(msgid):
+            lookup_threads.append(threading.current_thread() is threading.main_thread())
+            return parent
+
+        mu.find_by_msgid.side_effect = find_by_msgid
+
+        app, notify = await self._send_edited_draft(mu, mock_config)
+
+        assert len(app._tabs) == 0
+        mu.find_by_msgid.assert_called_once_with("<parent@example.com>")
+        assert lookup_threads == [False]
+        mu.mark_replied.assert_called_once_with(parent.path)
+        mu.move.assert_called_once_with(draft.path, "/Trash")
+
+    @pytest.mark.asyncio
+    async def test_failed_parent_lookup_still_completes_send(self, mock_config, tmp_path):
+        """The mail is already out; a mu error while flagging the parent is not a send error."""
+        mu, draft = self._draft_mu(tmp_path)
+        mu.find_by_msgid.side_effect = RuntimeError("mu command timed out")
+
+        app, notify = await self._send_edited_draft(mu, mock_config)
+
+        assert len(app._tabs) == 0
+        mu.mark_replied.assert_not_called()
+        assert "Message sent!" in [call.args[0] for call in notify.call_args_list]
+
+    @pytest.mark.asyncio
+    async def test_sending_edited_non_reply_draft_does_not_look_up_parent(
+        self, mock_config, tmp_path
+    ):
+        mu, draft = self._draft_mu(tmp_path)
+        draft.in_reply_to = ""
+        draft.references = []
+
+        app, notify = await self._send_edited_draft(mu, mock_config)
+
+        assert len(app._tabs) == 0
+        mu.find_by_msgid.assert_not_called()
+        mu.mark_replied.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_editing_draft_keeps_attachments_and_threading(self, mock_config, tmp_path):
         mu, draft = self._draft_mu(tmp_path)
