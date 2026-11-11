@@ -1,7 +1,7 @@
 # Example Bor Configuration File
 # Copy to ~/.config/bor.conf and customize.
-# Unknown sections are ignored, but a misspelled option inside a section makes
-# the whole file fail to load (Bor then warns and uses the defaults).
+# Unknown or misspelled sections and options are ignored; Bor shows a warning
+# for each one when it starts.
 
 [general]
 # Maximum number of messages to display in message list

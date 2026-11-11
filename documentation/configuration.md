@@ -5,9 +5,9 @@ A different file can be given with `bor --config PATH`, and individual options
 can be overridden on the command line with `bor --set section.option=value`
 (repeatable; values use TOML syntax, e.g. `--set general.max_messages=200`).
 
-Unknown sections are ignored, but an unknown or misspelled option inside a known
-section makes the whole file fail to load: Bor prints a warning at startup and
-falls back to the built-in defaults for everything.
+Unknown or misspelled sections and options are ignored, and Bor lists each one
+in a warning notification when it starts. If the file cannot be parsed at all
+(a TOML syntax error), Bor uses the built-in defaults and says so the same way.
 
 ## Configuration Sections
 
@@ -114,8 +114,7 @@ important = "dark_orange"
 
 The options `marked`, `header` and `quoted` are also accepted but currently have
 no effect (marked messages are shown with `display.flag_marked` instead). Note
-the key is `important`, not `flagged`: an unknown key here makes the whole
-configuration fail to load.
+the key is `important`, not `flagged`.
 
 ### [sync]
 

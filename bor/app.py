@@ -145,9 +145,8 @@ class BorApp(App):
         try:
             self.theme = self.config.general.theme
         except InvalidThemeError:
-            print(
-                f"Warning: Unknown theme '{self.config.general.theme}'. "
-                "Falling back to default 'textual-dark'."
+            self.config.warnings.append(
+                f"Unknown theme '{self.config.general.theme}'; using 'textual-dark'"
             )
             self.theme = "textual-dark"
         self.mu: MuInterface = MuInterface()
@@ -173,6 +172,12 @@ class BorApp(App):
 
     def on_mount(self) -> None:
         """Handle application mount."""
+        # Configuration problems: anything printed before the app started
+        # would be hidden by the full-screen UI, so report them here.
+        for warning in self.config.warnings:
+            self.notify(
+                warning, title="Configuration", severity="warning", timeout=15, markup=False
+            )
         # Load inbox by default, then focus
         self.call_later(self._load_inbox)
 

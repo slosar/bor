@@ -151,11 +151,18 @@ class Config:
     editor: EditorConfig = field(default_factory=EditorConfig)
     aliases: dict[str, str] = field(default_factory=dict)
     email_aliases: dict[str, str] = field(default_factory=dict)
+    # Problems found while loading, shown to the user once the app starts.
+    # Not a config section (init=False keeps it out of from_dict).
+    warnings: list[str] = field(default_factory=list, init=False, repr=False, compare=False)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Config:
         """
         Create a Config instance from a dictionary.
+
+        Unknown sections and options are skipped rather than rejected, so one
+        typo does not discard the rest of the file; each one is recorded in
+        `config.warnings`.
 
         Args:
             data: Configuration dictionary (typically from TOML file)
@@ -164,16 +171,28 @@ class Config:
             Config instance with all settings populated
         """
         config = cls()
-        for section in fields(cls):
-            if section.name not in data:
+        sections = {section.name: section for section in fields(cls) if section.init}
+
+        for name, value in data.items():
+            if name not in sections:
+                config.warnings.append(f"Unknown config section [{name}] ignored")
                 continue
-            current = getattr(config, section.name)
-            if is_dataclass(current):
-                # Unknown keys raise TypeError, which load_config() reports.
-                setattr(config, section.name, type(current)(**data[section.name]))
-            else:
+            if not isinstance(value, dict):
+                config.warnings.append(f"[{name}] must be a table; using defaults")
+                continue
+
+            current = getattr(config, name)
+            if not is_dataclass(current):
                 # Free-form tables such as [aliases] and [email_aliases]
-                setattr(config, section.name, data[section.name])
+                setattr(config, name, value)
+                continue
+
+            options = {option.name for option in fields(current)}
+            for key in value:
+                if key not in options:
+                    config.warnings.append(f"Unknown config option {name}.{key} ignored")
+            known = {key: option for key, option in value.items() if key in options}
+            setattr(config, name, type(current)(**known))
 
         return config
 
@@ -198,8 +217,9 @@ def load_config(path: Path | None = None) -> Config:
             data = tomllib.load(f)
         return Config.from_dict(data)
     except Exception as e:
-        print(f"Warning: Could not load config from {config_path}: {e}")
-        return Config()
+        config = Config()
+        config.warnings.append(f"Could not load {config_path}: {e}. Using defaults.")
+        return config
 
 
 def load_mailrc_aliases() -> dict[str, str]:
