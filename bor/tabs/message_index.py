@@ -492,6 +492,8 @@ class MessageIndexWidget(BaseTab):
         self.messages: list[EmailMessage] = []
         self.marked_messages: set[int] = set()
         self.current_query: str = ""
+        # Message whose thread is shown (Ctrl+T); None when showing current_query
+        self._thread_anchor: EmailMessage | None = None
         self.threading_enabled: bool = get_config().threading.enabled
         self._search_visible: bool = False
         self._pending_action: Callable | None = None
@@ -534,6 +536,7 @@ class MessageIndexWidget(BaseTab):
         use_threads = threads if threads is not None else self.threading_enabled
 
         self.current_query = query
+        self._thread_anchor = None
         # `mu find` spawns a subprocess and takes ~40ms on a large index, which
         # is long enough to be felt as a stall if it runs on the event loop.
         self.messages = await asyncio.to_thread(
@@ -721,7 +724,10 @@ class MessageIndexWidget(BaseTab):
     def _update_status(self) -> None:
         """Update the status bar."""
         label = self.query_one("#status-label", Label)
-        threading_status = "threaded" if self.threading_enabled else "flat"
+        if self._thread_anchor is not None:
+            threading_status = "thread view"
+        else:
+            threading_status = "threaded" if self.threading_enabled else "flat"
         marked_count = len(self.marked_messages)
         marked_str = f" | {marked_count} marked" if marked_count > 0 else ""
         label.update(f"{len(self.messages)} messages ({threading_status}){marked_str}")
@@ -875,8 +881,8 @@ class MessageIndexWidget(BaseTab):
         self.bor_app.mu.index()
 
         # Re-run current search
-        if self.current_query:
-            await self.search(self.current_query)
+        if self._thread_anchor is not None or self.current_query:
+            await self.rerun_view()
         else:
             # Default to inbox
             config = get_config()
@@ -889,8 +895,8 @@ class MessageIndexWidget(BaseTab):
         current_index = self._get_current_index()
         marked_ids = self._capture_marked_message_ids()
 
-        if self.current_query:
-            await self.search(self.current_query)
+        if self._thread_anchor is not None or self.current_query:
+            await self.rerun_view()
         else:
             config = get_config()
             await self.search(f'maildir:"{config.folders.inbox}"')
@@ -1016,7 +1022,7 @@ class MessageIndexWidget(BaseTab):
                 self.bor_app.mu.move(msg.path, archive_folder)
 
         # Refresh the list
-        await self.search(self.current_query)
+        await self.rerun_view()
         self._restore_cursor(desired_index)
         self.query_one(DataTable).focus()
 
@@ -1057,7 +1063,7 @@ class MessageIndexWidget(BaseTab):
     async def action_undo(self) -> None:
         """Undo the last move operation."""
         if self.bor_app.mu.undo_move():
-            await self.search(self.current_query)
+            await self.rerun_view()
 
     async def action_toggle_threading(self) -> None:
         """Toggle threading on/off."""
@@ -1065,14 +1071,40 @@ class MessageIndexWidget(BaseTab):
         await self.search(self.current_query)
 
     async def action_show_thread(self) -> None:
-        """Show all messages in the current thread."""
+        """Show all messages in the current thread, with the cursor on this one."""
         msg = self._get_current_message()
         if msg:
-            thread_messages = self.bor_app.mu.find_thread(msg)
-            self.messages = thread_messages
-            self.bor_app._current_messages = self.messages
-            await self._refresh_table()
-            self._update_status()
+            await self._show_thread(msg)
+            anchor_id = self._message_identity(msg)
+            for idx, message in enumerate(self.messages):
+                if self._message_identity(message) == anchor_id:
+                    self._restore_cursor(idx)
+                    break
+
+    async def _show_thread(self, anchor: EmailMessage) -> None:
+        """Replace the list with the thread containing `anchor`."""
+        # find_thread() runs several `mu find` passes; keep them off the UI.
+        self.messages = await asyncio.to_thread(self._find_thread, anchor)
+        self._thread_anchor = anchor
+        self.bor_app._current_messages = self.messages
+        self.bor_app._current_index = 0
+        # Marks are row positions in the previous list
+        self.marked_messages.clear()
+        await self._refresh_table()
+        self._update_status()
+
+    def _find_thread(self, anchor: EmailMessage) -> list[EmailMessage]:
+        """Run the thread query. Runs on a worker thread."""
+        mu = self.bor_app.mu
+        mu.wait_for_reindex()
+        return mu.find_thread(anchor)
+
+    async def rerun_view(self) -> None:
+        """Re-run whatever the list shows: the thread view or the current query."""
+        if self._thread_anchor is not None:
+            await self._show_thread(self._thread_anchor)
+        else:
+            await self.search(self.current_query)
 
     def action_delete(self) -> None:
         """Delete marked messages or current message with confirmation."""
@@ -1103,7 +1135,7 @@ class MessageIndexWidget(BaseTab):
             if msg:
                 self.bor_app.mu.move(msg.path, config.folders.trash)
 
-        await self.search(self.current_query)
+        await self.rerun_view()
         self.query_one(DataTable).focus()
 
     def action_edit_draft(self) -> None:

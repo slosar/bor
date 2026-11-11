@@ -76,7 +76,7 @@ In the search prompt:
 | Key | Action |
 |-----|--------|
 | T | Toggle threading |
-| Ctrl+T | Show thread for current message |
+| Ctrl+T | Show thread for current message (stays until the next search, I/O/U or T) |
 
 ### Sync & Refresh
 

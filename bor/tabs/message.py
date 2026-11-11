@@ -915,7 +915,7 @@ class MessageViewWidget(BaseTab):
             index_widget = self.bor_app.query_one(MessageIndexWidget)
         except Exception:
             return
-        await index_widget.search(index_widget.current_query)
+        await index_widget.rerun_view()
 
         # search() resets the shared cursor to the top; keep it on the message
         # shown here so M, flags and N/P keep acting on the right row.

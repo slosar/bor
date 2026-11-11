@@ -910,6 +910,43 @@ class TestQuit:
         assert msg["References"] == "<root@example.com> <parent@example.com>"
 
     @pytest.mark.asyncio
+    async def test_thread_view_clears_marks_and_survives_return(self, mock_mu_interface, mock_config):
+        """Ctrl+T drops marks (row numbers of the old list) and stays after a message tab."""
+        from bor.tabs.message_index import MessageIndexWidget
+
+        messages = mock_mu_interface.find.return_value
+        thread = [messages[3], messages[1], messages[4]]
+        mock_mu_interface.find_thread.return_value = thread
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    index = app.query_one(MessageIndexWidget)
+                    await pilot.press("m")  # marks row 0, cursor to row 1
+                    assert index.marked_messages == {0}
+
+                    await pilot.press("ctrl+t")
+                    await pilot.pause()
+                    assert index.marked_messages == set()
+                    assert [m.path for m in index.messages] == [m.path for m in thread]
+                    # Cursor stays on the message the thread was opened from
+                    assert app.query_one(DataTable).cursor_row == 1
+
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    await pilot.press("q")
+                    await pilot.pause()
+                    await pilot.pause()
+                    assert [m.path for m in index.messages] == [m.path for m in thread]
+
+                    await pilot.press("i")
+                    await pilot.pause()
+                    assert len(index.messages) == len(messages)
+
+    @pytest.mark.asyncio
     async def test_ctrl_q_quits(self, mock_mu_interface, mock_config):
         """Test that Ctrl+Q quits the application."""
         with patch('bor.app.get_config', return_value=mock_config):
