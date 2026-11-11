@@ -12,7 +12,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from rich.style import Style as RichStyle
 from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
@@ -576,42 +575,43 @@ class MessageIndexWidget(BaseTab):
         thread_prefixes = self._compute_thread_prefixes(self.messages)
 
         for idx, msg in enumerate(self.messages):
-            # Format date
-            date_str = self._format_date(msg.date, config)
+            cells = self._row_cells(idx, msg, config, thread_prefixes)
+            table.add_row(*cells, key=str(idx))
 
-            # Format from
-            from_str = msg.from_addr.name or msg.from_addr.email
-            if len(from_str) > config.display.from_width:
-                from_str = from_str[: config.display.from_width - 1] + "…"
+    def _row_cells(
+        self, idx: int, msg: EmailMessage, config, thread_prefixes: dict
+    ) -> tuple[Text, Text, Text, Text]:
+        """Build the flags, date, from and subject cells for one message row.
 
-            # Format subject with threading tree prefix
-            subject = msg.subject
-            if idx in thread_prefixes and thread_prefixes[idx]:
-                subject = f"{thread_prefixes[idx]} {subject}"
+        Every cell is a Text: DataTable parses plain-string cells as markup,
+        which hid subjects such as "[mu-discuss] ..." and crashed on "[/x]".
+        """
+        date_str = self._format_date(msg.date, config)
 
-            # Determine text styling based on message state.
-            style = ""
-            if msg.is_flagged:
-                style = f"bold {config.colors.important}"
-            elif msg.is_unread:
-                style = f"bold {config.colors.unread}"
+        from_str = msg.from_addr.name or msg.from_addr.email
+        if len(from_str) > config.display.from_width:
+            from_str = from_str[: config.display.from_width - 1] + "…"
 
-            # Create styled text for each cell
-            flags_text = self._flags_text(
-                msg, config, marked=idx in self.marked_messages, base_style=style
-            )
-            if style:
-                date_text = Text(date_str, style=style)
-                from_text = Text(from_str, style=style)
-                subject_text = Text(subject, style=style)
-            else:
-                date_text = date_str
-                from_text = from_str
-                subject_text = subject
+        # Subject with threading tree prefix
+        subject = msg.subject
+        if thread_prefixes.get(idx):
+            subject = f"{thread_prefixes[idx]} {subject}"
 
-            # Add row
-            row_key = str(idx)
-            table.add_row(flags_text, date_text, from_text, subject_text, key=row_key)
+        style = ""
+        if msg.is_flagged:
+            style = f"bold {config.colors.important}"
+        elif msg.is_unread:
+            style = f"bold {config.colors.unread}"
+
+        flags_text = self._flags_text(
+            msg, config, marked=idx in self.marked_messages, base_style=style
+        )
+        return (
+            flags_text,
+            Text(date_str, style=style),
+            Text(from_str, style=style),
+            Text(subject, style=style),
+        )
 
     def _compute_thread_prefixes(self, messages: list[EmailMessage]) -> dict:
         """
@@ -946,55 +946,19 @@ class MessageIndexWidget(BaseTab):
         if idx < 0 or idx >= len(self.messages):
             return
 
-        msg = self.messages[idx]
         config = get_config()
         table = self.query_one(DataTable)
-
-        date_str = self._format_date(msg.date, config)
-        from_str = msg.from_addr.name or msg.from_addr.email
-        if len(from_str) > config.display.from_width:
-            from_str = from_str[: config.display.from_width - 1] + "…"
-
-        # Format subject with threading tree prefix
-        thread_prefixes = self._compute_thread_prefixes(self.messages)
-        subject = msg.subject
-        if idx in thread_prefixes and thread_prefixes[idx]:
-            subject = f"{thread_prefixes[idx]} {subject}"
-
-        # Determine text styling.
-        style = ""
-        if msg.is_flagged:
-            style = f"bold {config.colors.important}"
-        elif msg.is_unread:
-            style = f"bold {config.colors.unread}"
-
-        # Create styled text using Rich Style for explicit color control
-        flags_text = self._flags_text(
-            msg, config, marked=idx in self.marked_messages, base_style=style
+        cells = self._row_cells(
+            idx, self.messages[idx], config, self._compute_thread_prefixes(self.messages)
         )
-        if style:
-            rich_style = RichStyle.parse(style)
-            date_text = Text(date_str, style=rich_style)
-            from_text = Text(from_str, style=rich_style)
-            subject_text = Text(subject, style=rich_style)
-        else:
-            date_text = Text(date_str)
-            from_text = Text(from_str)
-            subject_text = Text(subject)
 
-        # Update the row in place
-        row_key = str(idx)
         # DataTable doesn't have direct row update, so we update cell by cell
         try:
             from textual.coordinate import Coordinate
 
-            row_idx = table.get_row_index(row_key)
-
-            # Update each column by coordinate
-            table.update_cell_at(Coordinate(row_idx, 0), flags_text, update_width=False)
-            table.update_cell_at(Coordinate(row_idx, 1), date_text, update_width=False)
-            table.update_cell_at(Coordinate(row_idx, 2), from_text, update_width=False)
-            table.update_cell_at(Coordinate(row_idx, 3), subject_text, update_width=False)
+            row_idx = table.get_row_index(str(idx))
+            for column, cell in enumerate(cells):
+                table.update_cell_at(Coordinate(row_idx, column), cell, update_width=False)
             # Force visual refresh
             self.refresh(layout=True)
         except Exception:

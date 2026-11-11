@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import shlex
 
+from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -82,7 +83,7 @@ class SyncWidget(BaseTab):
         """Create the widget layout."""
         with Vertical():
             with Container(classes="header-bar"):
-                yield Label(f"Running: {self.command}", id="command-label")
+                yield Label(Text(f"Running: {self.command}"), id="command-label")
             yield SyncOutput(id="output")
             with Container(classes="status-bar"):
                 yield Label("Starting...", id="status-label")
@@ -154,7 +155,7 @@ class SyncWidget(BaseTab):
             output.write_line(f"Error: Command not found: {self.command}")
 
         except Exception as e:
-            status.update(f"✗ Error: {e}")
+            status.update(Text(f"✗ Error: {e}"))
             output.write_line(f"Error: {e}")
 
         finally:

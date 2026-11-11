@@ -429,7 +429,8 @@ class UrlPickerBar(Static):
             lines.append(f"(+{len(self._urls) - 9} more)")
         if self._error:
             lines.append(self._error)
-        self.update("\n".join(lines))
+        # URLs may contain brackets; never parse them as markup
+        self.update(Text("\n".join(lines)))
 
     def on_key(self, event: events.Key) -> None:
         """Handle key events for URL selection."""
@@ -952,7 +953,7 @@ class MessageViewWidget(BaseTab):
         link = getattr(event, "link", None)
         if link:
             self._open_url(link)
-            self.notify(f"Opening: {link[:50]}...")
+            self.notify(f"Opening: {link[:50]}...", markup=False)
             event.prevent_default()
             event.stop()
 
@@ -994,7 +995,7 @@ class MessageViewWidget(BaseTab):
         if len(urls) == 1:
             # Only one URL, open it directly
             self._open_url(urls[0])
-            self.notify(f"Opening: {urls[0][:50]}...")
+            self.notify(f"Opening: {urls[0][:50]}...", markup=False)
         else:
             # Multiple URLs - show selection
             picker = self.query_one("#url-picker", UrlPickerBar)
@@ -1003,7 +1004,7 @@ class MessageViewWidget(BaseTab):
     def _open_url_from_picker(self, url: str) -> None:
         """Open a URL selected from the picker."""
         self._open_url(url)
-        self.notify(f"Opening: {url[:50]}...")
+        self.notify(f"Opening: {url[:50]}...", markup=False)
 
     def _open_url(self, url: str) -> None:
         """Open a URL in the system browser."""
@@ -1076,4 +1077,4 @@ class MessageViewWidget(BaseTab):
             webbrowser.open(tmp_path.as_uri())
             self.notify("Message opened in browser")
         except Exception as e:
-            self.notify(f"Could not open browser: {e}")
+            self.notify(f"Could not open browser: {e}", markup=False)

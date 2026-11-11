@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -55,7 +56,8 @@ class AttachmentItem(ListItem):
             size_str = f"{size / (1024 * 1024):.1f} MB"
 
         inline_marker = " [inline]" if is_inline else ""
-        yield Static(f"[{self.index}] {filename} ({content_type}, {size_str}){inline_marker}")
+        # Text, not markup: "[1]", "[inline]" and file names are literal
+        yield Static(Text(f"[{self.index}] {filename} ({content_type}, {size_str}){inline_marker}"))
 
 
 def _kitty_image_size_params(img_w: int, img_h: int, avail_cols: int, avail_rows: int) -> str:
@@ -159,8 +161,8 @@ class AttachmentPreview(ScrollableContainer):
         self._title = title
         self._content = content
         self._current_image_path = None
-        self.query_one("#preview-title", Label).update(title)
-        self.query_one("#preview-content", Static).update(content)
+        self.query_one("#preview-title", Label).update(Text(title))
+        self.query_one("#preview-content", Static).update(Text(content))
 
     def show_message(self, message: str) -> None:
         """
@@ -174,7 +176,7 @@ class AttachmentPreview(ScrollableContainer):
         self._content = message
         self._current_image_path = None
         self.query_one("#preview-title", Label).update("")
-        self.query_one("#preview-content", Static).update(message)
+        self.query_one("#preview-content", Static).update(Text(message))
 
     def show_image(self, title: str, image_path: Path) -> None:
         """
@@ -187,11 +189,14 @@ class AttachmentPreview(ScrollableContainer):
         self.clear_image()  # Clear any previous image first
         self._title = title
         self._current_image_path = image_path
-        self.query_one("#preview-title", Label).update(title)
+        self.query_one("#preview-title", Label).update(Text(title))
 
         # Display a placeholder and trigger image render
         self.query_one("#preview-content", Static).update(
-            f"[Image: {title}]\n\nPress Enter to open with system viewer\nPress 's' to save to disk"
+            Text(
+                f"[Image: {title}]\n\nPress Enter to open with system viewer\n"
+                "Press 's' to save to disk"
+            )
         )
 
         # Render the image using Kitty graphics after a brief delay
@@ -402,7 +407,7 @@ class AttachmentsWidget(BaseTab):
         """Create the widget layout."""
         with Vertical():
             with Horizontal(classes="info-bar"):
-                yield Label(f"Attachments for: {self.message.subject}", id="info-label")
+                yield Label(Text(f"Attachments for: {self.message.subject}"), id="info-label")
 
             yield ListView(id="attachment-list")
             yield AttachmentPreview(id="preview")

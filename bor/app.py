@@ -16,6 +16,7 @@ from pathlib import Path
 from textual import events
 from textual.app import App, ComposeResult, InvalidThemeError
 from textual.binding import Binding
+from textual.content import Content
 from textual.widgets import Footer, Header, TabbedContent, TabPane
 
 from bor import __version__
@@ -363,7 +364,8 @@ class BorApp(App):
         tab_id = f"tab-{self._tab_counter}"
 
         # Create and add the new tab pane FIRST
-        pane = TabPane(title, id=tab_id)
+        # Titles are message subjects: never parse them as markup
+        pane = TabPane(Content(title), id=tab_id)
         tabs.add_pane(pane)
 
         # Now remove old tab if replacing (after new one is added to avoid focus loss)
@@ -402,7 +404,7 @@ class BorApp(App):
             # Get the Tab widget (button) for this pane
             try:
                 tab = tabs.get_tab(tab_id)
-                tab.label = title
+                tab.label = Content(title)
             except Exception:
                 pass
 

@@ -22,6 +22,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
+from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -913,8 +914,8 @@ class BulkAttachmentItem(ListItem):
         """Refresh the rendered label."""
         self.query_one(Static).update(self._render_label())
 
-    def _render_label(self) -> str:
-        """Return the display string for this item."""
+    def _render_label(self) -> Text:
+        """Return the display text for this item (not markup: "[x]" is literal)."""
         marker = "[x]" if self.selected else "[ ]"
         size = 0
         if self.path.exists():
@@ -928,7 +929,7 @@ class BulkAttachmentItem(ListItem):
             size_text = f"{size / 1024:.1f} KB"
         else:
             size_text = f"{size / (1024 * 1024):.1f} MB"
-        return f"{marker} {self.path.name} ({size_text})"
+        return Text(f"{marker} {self.path.name} ({size_text})")
 
 
 class BulkAttachmentList(ListView):
@@ -1514,7 +1515,7 @@ class ComposeWidget(BaseTab):
 
         if self.attachments:
             names = [a.name for a in self.attachments]
-            label.update(f"📎 Attachments: {', '.join(names)}")
+            label.update(Text(f"📎 Attachments: {', '.join(names)}"))
             bar.display = True
         else:
             bar.display = False
@@ -1742,7 +1743,7 @@ class ComposeWidget(BaseTab):
             return True
 
         except Exception as e:
-            self.notify(f"Error sending message: {e}", severity="error")
+            self.notify(f"Error sending message: {e}", severity="error", markup=False)
             return False
 
     @staticmethod
@@ -1803,7 +1804,7 @@ class ComposeWidget(BaseTab):
             self.bor_app.mu.queue_reindex(added=str(target_path))
             return True
         except Exception as e:
-            self.notify(f"Error saving: {e}", severity="error")
+            self.notify(f"Error saving: {e}", severity="error", markup=False)
             return False
 
     # Event handlers for Ctrl+L commands (from any input)
@@ -1870,12 +1871,12 @@ class ComposeWidget(BaseTab):
 
         if mode == "bulk_attach_dir":
             if not path.exists():
-                self.notify(f"Directory not found: {path}", severity="error")
+                self.notify(f"Directory not found: {path}", severity="error", markup=False)
                 self.query_one("#body-input").focus()
                 return
 
             if not path.is_dir():
-                self.notify(f"Not a directory: {path}", severity="error")
+                self.notify(f"Not a directory: {path}", severity="error", markup=False)
                 self.query_one("#body-input").focus()
                 return
 
@@ -1885,12 +1886,12 @@ class ComposeWidget(BaseTab):
 
         # Validate the file
         if not path.exists():
-            self.notify(f"File not found: {path}", severity="error")
+            self.notify(f"File not found: {path}", severity="error", markup=False)
             self.query_one("#body-input").focus()
             return
 
         if not path.is_file():
-            self.notify(f"Not a file: {path}", severity="error")
+            self.notify(f"Not a file: {path}", severity="error", markup=False)
             self.query_one("#body-input").focus()
             return
 
@@ -1900,24 +1901,26 @@ class ComposeWidget(BaseTab):
             try:
                 content = self._read_insert_file(path)
             except UnicodeDecodeError:
-                self.notify(f"File is not valid UTF-8 text: {path.name}", severity="error")
+                self.notify(
+                    f"File is not valid UTF-8 text: {path.name}", severity="error", markup=False
+                )
                 body_input.focus()
                 return
             except OSError as error:
-                self.notify(f"Error reading file: {error}", severity="error")
+                self.notify(f"Error reading file: {error}", severity="error", markup=False)
                 body_input.focus()
                 return
 
             body_input.focus()
             body_input.insert(content)
-            self.notify(f"Inserted: {path.name}")
+            self.notify(f"Inserted: {path.name}", markup=False)
         else:
             if path not in self.attachments:
                 self.attachments.append(path)
                 self._update_attachment_bar()
-                self.notify(f"Attached: {path.name}")
+                self.notify(f"Attached: {path.name}", markup=False)
             else:
-                self.notify(f"Already attached: {path.name}", severity="warning")
+                self.notify(f"Already attached: {path.name}", severity="warning", markup=False)
 
         # Remember the directory for next time
         self._last_attachment_dir = path.parent
@@ -1980,7 +1983,7 @@ class ComposeWidget(BaseTab):
         self.query_one("#body-input", ComposeTextArea).focus()
 
         if added:
-            self.notify(f"Attached {len(added)} file(s)")
+            self.notify(f"Attached {len(added)} file(s)", markup=False)
         elif duplicates:
             self.notify("Selected files were already attached", severity="warning")
 
@@ -2000,19 +2003,19 @@ class ComposeWidget(BaseTab):
             label.update("")
             return
 
-        # Format completions, highlighting the current one
-        parts = []
+        # Format completions, highlighting the current one. Built as Text so
+        # file names containing brackets are shown literally.
+        text = Text()
         for i, comp in enumerate(event.completions):
+            if i:
+                text.append(" | ")
             # Show just the filename part
             name = Path(comp).name
             if comp.endswith("/"):
                 name += "/"
-            if i == event.current_index:
-                parts.append(f"[bold reverse]{name}[/bold reverse]")
-            else:
-                parts.append(name)
+            text.append(name, style="bold reverse" if i == event.current_index else "")
 
-        label.update(" | ".join(parts))
+        label.update(text)
 
     # Actions
 
@@ -2066,7 +2069,7 @@ class ComposeWidget(BaseTab):
         """Populate and show the bulk attachment picker for a directory."""
         files = self._list_bulk_attachable_files(directory)
         if not files:
-            self.notify(f"No files found in {directory}", severity="warning")
+            self.notify(f"No files found in {directory}", severity="warning", markup=False)
             self._file_path_mode = None
             self.query_one("#body-input", ComposeTextArea).focus()
             return
@@ -2105,7 +2108,9 @@ class ComposeWidget(BaseTab):
         count = len(self._get_selected_bulk_attachment_paths())
         directory = self._bulk_picker_directory or self._last_attachment_dir
         title.update(
-            "Select files from "
-            f"{directory} | Space=toggle Enter=attach Esc=cancel Ctrl+A=toggle all | "
-            f"{count} selected"
+            Text(
+                "Select files from "
+                f"{directory} | Space=toggle Enter=attach Esc=cancel Ctrl+A=toggle all | "
+                f"{count} selected"
+            )
         )
