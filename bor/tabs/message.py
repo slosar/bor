@@ -483,6 +483,7 @@ class MessageViewWidget(BaseTab):
         Binding("end", "scroll_end", "Bottom", show=False),
         # Actions - < returns without closing, Q closes and returns (< handled in on_key)
         Binding("q", "close_and_return", "Close"),
+        Binding("escape", "close_and_return", "Close", show=False),
         # M, X, D, A work as in Message Index
         Binding("m", "mark_message", "Mark"),
         Binding("x", "archive", "Archive"),

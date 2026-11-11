@@ -276,9 +276,12 @@ class LLMWidget(BaseTab):
     # Actions
 
     def action_cancel_or_back(self) -> None:
-        """Esc: cancel the question being answered, otherwise go back to the index."""
+        """Esc: cancel the question being answered; otherwise go back to the index,
+        closing the tab if the conversation is empty."""
         if self.is_running and self._worker is not None:
             self._worker.cancel()
+        elif not self.session.transcript:
+            self.close_tab()
         else:
             self.switch_to_index()
 

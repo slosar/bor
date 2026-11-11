@@ -158,7 +158,7 @@ bor
 |-----|--------|
 | Space/PgDn | Scroll down |
 | < | Return to index (keep tab open) |
-| Q | Close tab and return |
+| Q or Esc | Close tab and return |
 | N/P | Next/Previous message |
 | R | Reply |
 | F | Forward |

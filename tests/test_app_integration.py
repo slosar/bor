@@ -289,6 +289,36 @@ class TestMessageView:
                     assert len(app._tabs) < initial_tabs or initial_tabs == 0
 
     @pytest.mark.asyncio
+    async def test_esc_closes_tab_like_q(self, mock_mu_interface, mock_config):
+        """Esc closes the message tab, but first only dismisses an open URL picker."""
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+                from bor.tabs.message import MessageViewWidget, UrlPickerBar
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    assert len(app._tabs) == 1
+
+                    picker = app.query_one(UrlPickerBar)
+                    picker.ask(["https://a.example", "https://b.example"], lambda url: None)
+                    await pilot.pause()
+                    await pilot.press("escape")
+                    await pilot.pause()
+                    assert not picker.has_class("visible")
+                    assert len(app._tabs) == 1
+
+                    await pilot.press("escape")
+                    await pilot.pause()
+                    await pilot.pause()
+                    assert len(app._tabs) == 0
+                    assert len(app.query(MessageViewWidget)) == 0
+                    assert app.query_one("TabbedContent").active == "tab-0"
+
+    @pytest.mark.asyncio
     async def test_marked_messages_survive_open_and_return(self, mock_mu_interface, mock_config):
         """Marked messages should persist after opening another message and returning."""
         with patch('bor.app.get_config', return_value=mock_config):

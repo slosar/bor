@@ -123,7 +123,7 @@ bar shows `LLM: <title>` while the view is shown.
 | N | Next message |
 | P | Previous message |
 | < | Return to index (keep tab open) |
-| Q | Close tab and return to index |
+| Q or Esc | Close tab and return to index |
 
 ### Actions
 
@@ -255,7 +255,7 @@ answers in the tab. See the `[llm]` section in [configuration.md](configuration.
 | ↑ / ↓ | Browse earlier questions |
 | Ctrl+K | Delete to end of line (copied to clipboard) |
 | PageUp / PageDown | Scroll the conversation |
-| Esc | Cancel the question being answered; otherwise return to the index |
+| Esc | Cancel the question being answered; otherwise return to the index (closing the tab if the conversation is empty) |
 | Ctrl+N | Start a new conversation |
 
 Each step the model takes (a search, reading a message or a thread, publishing

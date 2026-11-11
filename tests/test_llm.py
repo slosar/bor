@@ -454,10 +454,15 @@ async def test_q_opens_one_llm_tab(tmp_path: Path) -> None:
                 await _settle(pilot, app)
                 assert isinstance(app.focused, QuestionInput)
 
-                await pilot.press("escape")  # idle: back to the index
+                await pilot.press("escape")  # empty conversation: the tab closes
                 await _settle(pilot, app)
                 assert app.query_one("TabbedContent").active == "tab-0"
+                assert len(app.query(LLMWidget)) == 0
 
+                await pilot.press("q")
+                await _settle(pilot, app)
+                app.action_switch_tab(0)
+                await _settle(pilot, app)
                 await pilot.press("q")
                 await _settle(pilot, app)
                 assert len(app.query(LLMWidget)) == 1
@@ -529,6 +534,7 @@ async def test_ctrl_n_starts_a_new_conversation(tmp_path: Path) -> None:
         with patch("bor.app.MuInterface", return_value=_index_mu()):
             with patch("bor.llm.session.make_client", return_value=client):
                 from bor.app import BorApp
+                from bor.tabs.llm import LLMWidget
 
                 app = BorApp()
                 async with app.run_test() as pilot:
@@ -545,6 +551,20 @@ async def test_ctrl_n_starts_a_new_conversation(tmp_path: Path) -> None:
                     # The new conversation does not carry the first question
                     contents = [m["content"] for m in client.requests[1]["messages"]]
                     assert not any("first" in (c or "") for c in contents)
+
+                    # Esc with a conversation keeps the tab; after Ctrl+N it closes it
+                    await pilot.press("escape")
+                    await _settle(pilot, app)
+                    assert app.query_one("TabbedContent").active == "tab-0"
+                    assert len(app.query(LLMWidget)) == 1
+                    await pilot.press("q")
+                    await _settle(pilot, app)
+                    await pilot.press("ctrl+n")
+                    await _settle(pilot, app)
+                    await pilot.press("escape")
+                    await _settle(pilot, app)
+                    assert app.query_one("TabbedContent").active == "tab-0"
+                    assert len(app.query(LLMWidget)) == 0
 
 
 async def test_esc_cancels_a_running_question(tmp_path: Path) -> None:
