@@ -3,6 +3,7 @@
 import tempfile
 from pathlib import Path
 from datetime import datetime
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -371,3 +372,43 @@ class TestMuInterface:
         """Test undo with empty history."""
         mu = MuInterface()
         assert not mu.undo_move()
+
+
+def _maildir_with_message(tmp_path):
+    root = tmp_path / "Mail"
+    (root / "INBOX" / "cur").mkdir(parents=True)
+    message = root / "INBOX" / "cur" / "1.host:2,S"
+    message.write_text("Subject: x\n\nbody")
+    mu = MuInterface()
+    mu._root_maildir = str(root)
+    calls = []
+    mu._run_mu = lambda args, capture_output=True: calls.append(args) or MagicMock(returncode=0)
+    return mu, root, message, calls
+
+
+def test_undo_move_restores_file_and_reindexes(tmp_path):
+    mu, root, message, calls = _maildir_with_message(tmp_path)
+    archived = root / "Archive" / "cur" / message.name
+
+    assert mu.move(str(message), "/Archive") == str(archived)
+    assert mu.wait_for_reindex()
+    calls.clear()
+
+    assert mu.undo_move()
+    assert mu.wait_for_reindex()
+
+    assert message.exists() and not archived.exists()
+    assert calls == [["remove", str(archived)], ["add", str(message)]]
+
+
+def test_failed_move_is_not_recorded_for_undo(tmp_path, monkeypatch):
+    mu, root, message, calls = _maildir_with_message(tmp_path)
+
+    def failing_move(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("bor.mu.shutil.move", failing_move)
+
+    assert mu.move(str(message), "/Archive") is None
+    assert mu._move_history == []
+    assert calls == []

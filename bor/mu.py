@@ -1013,17 +1013,16 @@ class MuInterface:
         new_path = target_dir / path_obj.name
 
         try:
-            # Store for undo
-            self._move_history.append((str(new_path), path))
-
             # Move the file first, then let the background worker tell mu.
             # Anything that queries mu afterwards waits via wait_for_reindex().
             shutil.move(str(path_obj), str(new_path))
-            self.queue_reindex(path, str(new_path))
-
-            return str(new_path)
         except OSError:
             return None
+
+        # Only a move that happened can be undone
+        self._move_history.append((str(new_path), path))
+        self.queue_reindex(path, str(new_path))
+        return str(new_path)
 
     def undo_move(self) -> bool:
         """
@@ -1047,9 +1046,13 @@ class MuInterface:
 
         try:
             shutil.move(str(current), str(original))
-            return True
         except OSError:
             return False
+
+        # Without this mu keeps the message at its moved-to location, so it
+        # would not reappear in the original folder until the next `mu index`.
+        self.queue_reindex(str(current), str(original))
+        return True
 
     def delete(self, path: str, permanent: bool = False) -> bool:
         """
