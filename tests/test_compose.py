@@ -622,3 +622,49 @@ def test_file_path_completion_keeps_input_when_matches_diverge() -> None:
         ["/tmp/alpha.txt", "/tmp/archive.txt"],
     )
     assert completed == "/tmp/a"
+
+
+def test_send_keeps_bcc_out_of_transmitted_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bcc recipients get the mail, but no recipient sees the Bcc header."""
+    from email.mime.text import MIMEText
+
+    msg = MIMEMultipart("alternative")
+    msg["From"] = "me@example.com"
+    msg["To"] = "to@example.com"
+    msg["BCC"] = "Secret <secret@example.com>"
+    msg["Subject"] = "hi"
+    msg.attach(MIMEText("body", "plain", "utf-8"))
+
+    sent: dict = {}
+
+    class FakeSMTP:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def starttls(self) -> None:
+            pass
+
+        def login(self, *args) -> None:
+            pass
+
+        def sendmail(self, from_addr, to_addrs, data) -> None:
+            sent.update(from_addr=from_addr, to_addrs=to_addrs, data=data)
+
+        def quit(self) -> None:
+            pass
+
+    widget = ComposeWidget()
+    saved: list[str] = []
+    monkeypatch.setattr(widget, "_build_message", lambda: msg)
+    monkeypatch.setattr(
+        widget, "_save_to_folder", lambda folder, m=None: saved.append(m.as_string()) or True
+    )
+    monkeypatch.setattr(compose_module.smtplib, "SMTP", FakeSMTP)
+
+    assert widget._send_message()
+
+    transmitted_headers = sent["data"].split("\n\n", 1)[0]
+    assert "secret@example.com" not in transmitted_headers
+    assert sent["to_addrs"] == ["to@example.com", "secret@example.com"]
+    # The sent-folder copy keeps the Bcc header as a record
+    assert "BCC: Secret <secret@example.com>" in saved[0]

@@ -1725,7 +1725,9 @@ class ComposeWidget(BaseTab):
 
             to_addrs = [addr for addr in to_addrs if addr]
 
-            server.sendmail(config.identity.email, to_addrs, msg.as_string())
+            # Bcc recipients are in the envelope only; the copy saved to the
+            # sent folder below keeps the header as a record.
+            server.sendmail(config.identity.email, to_addrs, self._wire_format(msg))
             server.quit()
 
             # Copy to sent folder
@@ -1736,6 +1738,23 @@ class ComposeWidget(BaseTab):
         except Exception as e:
             self.notify(f"Error sending message: {e}", severity="error")
             return False
+
+    @staticmethod
+    def _wire_format(msg: MIMEMultipart) -> str:
+        """Serialize a message for transmission, without its Bcc header.
+
+        smtplib's sendmail() sends the text as given, so a Bcc header left in
+        it would show every recipient the blind-copied addresses.
+        """
+        bcc_values = msg.get_all("BCC")
+        if not bcc_values:
+            return msg.as_string()
+        del msg["BCC"]
+        try:
+            return msg.as_string()
+        finally:
+            for value in bcc_values:
+                msg["BCC"] = value
 
     def _save_draft(self) -> bool:
         """
