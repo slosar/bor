@@ -37,6 +37,7 @@ from bor.config import get_config, load_mailrc_aliases
 from bor.editing import copy_to_clipboard, kill_input_to_end, kill_text_line, normalize_newlines
 from bor.mu import EmailAddress, EmailMessage
 from bor.tabs.base import BaseTab
+from bor.tabs.message_index import ConfirmBar
 
 try:
     import pyperclip
@@ -1131,6 +1132,9 @@ class ComposeWidget(BaseTab):
         self._file_path_mode: str | None = None
         self._bulk_picker_directory: Path | None = None
         self._draft_deleted: bool = False
+        # Threading headers of an edited draft that was itself a reply
+        self._draft_in_reply_to: str = ""
+        self._draft_references: str = ""
 
     def compose(self) -> ComposeResult:
         """Create the widget layout."""
@@ -1166,6 +1170,8 @@ class ComposeWidget(BaseTab):
                     "", id="bulk-attachment-picker-title", classes="bulk-attachment-picker-title"
                 )
                 yield BulkAttachmentList(id="bulk-attachment-list")
+
+            yield ConfirmBar("", id="confirm-bar")
 
             with Horizontal(classes="status-bar"):
                 yield Label(
@@ -1506,8 +1512,30 @@ class ComposeWidget(BaseTab):
         body_input = self.query_one("#body-input", ComposeTextArea)
         body_input.text = normalize_newlines(full_msg.body_txt or "")
 
-        # Remove the original draft so it doesn't remain in Drafts
-        self._delete_original_draft(msg)
+        # Keep the draft's attachments
+        if full_msg.attachments:
+            target_dir = Path(tempfile.mkdtemp(prefix="bor-draft-"))
+            self.attachments.extend(
+                self._collect_forward_attachments(
+                    full_msg.path,
+                    full_msg.attachments,
+                    target_dir,
+                    self.bor_app.mu.extract_attachment,
+                )
+            )
+
+        # Keep the threading headers of a draft reply
+        in_reply_to = _bracketed_msgids(full_msg.in_reply_to or "")
+        self._draft_in_reply_to = in_reply_to[0] if in_reply_to else ""
+        references: list[str] = []
+        for value in full_msg.references or []:
+            for msgid in _bracketed_msgids(value):
+                if msgid not in references:
+                    references.append(msgid)
+        self._draft_references = " ".join(references)
+
+        # The original stays in Drafts until the edited version is saved or
+        # sent (see _retire_original_draft), so cancelling loses nothing.
 
     def _update_attachment_bar(self) -> None:
         """Update the attachment bar display."""
@@ -1537,16 +1565,14 @@ class ComposeWidget(BaseTab):
 
         asyncio.create_task(index_widget.search(query))
 
-    def _delete_original_draft(self, msg: EmailMessage) -> None:
-        """Remove the original draft from Drafts when editing."""
-        if self._draft_deleted:
+    def _retire_original_draft(self) -> None:
+        """Move the draft being edited to Trash once it has been saved or sent."""
+        if not self.edit_draft or self._draft_deleted:
             return
 
         config = get_config()
-        moved = self.bor_app.mu.move(msg.path, config.folders.trash)
-        if moved:
-            self._draft_deleted = True
-            self._refresh_index_after_draft_change()
+        moved = self.bor_app.mu.move(self.edit_draft.path, config.folders.trash)
+        self._draft_deleted = bool(moved)
 
     def _format_address(self, name: str, email_addr: str) -> str:
         """
@@ -1657,13 +1683,11 @@ class ComposeWidget(BaseTab):
             msg["BCC"] = self._format_address_list(bcc)
 
         # Reply headers
-        parent_ids = _bracketed_msgids(self.reply_to.msgid) if self.reply_to else []
-        if parent_ids:
-            msg["In-Reply-To"] = parent_ids[0]
-
-            references = self._compose_references(self.reply_to)
-            if references:
-                msg["References"] = references
+        in_reply_to, references = self._threading_headers()
+        if in_reply_to:
+            msg["In-Reply-To"] = in_reply_to
+        if references:
+            msg["References"] = references
 
         # Add body
         body = self.query_one("#body-input", ComposeTextArea).text
@@ -1675,6 +1699,15 @@ class ComposeWidget(BaseTab):
             msg.attach(self._attachment_part(attachment_path))
 
         return msg
+
+    def _threading_headers(self) -> tuple[str, str]:
+        """Return the (In-Reply-To, References) values for this message."""
+        if self.reply_to:
+            parent_ids = _bracketed_msgids(self.reply_to.msgid)
+            if parent_ids:
+                return parent_ids[0], self._compose_references(self.reply_to)
+            return "", ""
+        return self._draft_in_reply_to, self._draft_references
 
     @staticmethod
     def _attachment_part(path: Path) -> MIMEBase:
@@ -1836,21 +1869,26 @@ class ComposeWidget(BaseTab):
                 self.bor_app.mu.mark_replied(self.reply_to.path)
             elif self.forward:
                 self.bor_app.mu.mark_forwarded(self.forward.path)
+            self._retire_original_draft()
             self.notify("Message sent!")
             self.close_tab()
 
     def on_save_draft(self, event: SaveDraft) -> None:
         """Handle save draft command."""
         if self._save_draft():
+            self._retire_original_draft()
             self.bor_app.mu.index()
             self._refresh_index_after_draft_change()
             self.notify("Draft saved!")
             self.close_tab()
 
     def on_cancel_compose(self, event: CancelCompose) -> None:
-        """Handle cancel compose command."""
-        # TODO: Add confirmation dialog
-        self.close_tab()
+        """Handle cancel compose command: confirm, then close without saving."""
+        if self.edit_draft:
+            prompt = "Discard your changes? The draft stays in Drafts."
+        else:
+            prompt = "Discard this message?"
+        self.query_one("#confirm-bar", ConfirmBar).ask(prompt, self.close_tab)
 
     def on_focus_to(self, event: FocusTo) -> None:
         """Handle focus To field command."""

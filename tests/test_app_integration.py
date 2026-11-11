@@ -514,7 +514,7 @@ class TestIndexRefreshOnReturn:
                     await pilot.press("c")
                     await pilot.pause()
 
-                    await pilot.press("ctrl+l", "x")
+                    await pilot.press("ctrl+l", "x", "y")
                     await pilot.pause()
 
                     assert mock_mu_interface.find.call_count > initial_find_calls
@@ -808,6 +808,106 @@ class TestQuit:
                     await pilot.pause()
                     assert view._message_ref.path == "/test/path/message1"
                     mu.move.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cancel_compose_asks_for_confirmation(self, mock_mu_interface, mock_config):
+        """Ctrl+L X discards only after y; n keeps the message and its focus."""
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("c")
+                    await pilot.pause()
+                    await pilot.press(*"bob")
+                    await pilot.press("ctrl+l", "x")
+                    await pilot.pause()
+                    assert len(app._tabs) == 1
+
+                    await pilot.press("n")
+                    await pilot.pause()
+                    assert len(app._tabs) == 1
+                    assert app.focused.id == "to-input"
+                    assert app.focused.value == "bob"
+
+                    await pilot.press("ctrl+l", "x", "y")
+                    await pilot.pause()
+                    assert len(app._tabs) == 0
+
+    @staticmethod
+    def _draft_mu(tmp_path):
+        """Mock mu with one draft that is a reply and has an attachment."""
+        draft = MockEmailMessage(
+            path="/mail/Drafts/cur/draft:2,S",
+            maildir="/Drafts",
+            msgid="draft@example.com",
+            subject="Re: plans",
+            in_reply_to="<parent@example.com>",
+            references=["<root@example.com>", "<parent@example.com>"],
+            attachments=[{"filename": "plan.pdf", "part_index": 2, "content_type": "application/pdf"}],
+        )
+        mu = MagicMock()
+        mu.find.return_value = [draft]
+        mu.find_contacts.return_value = []
+        mu.view.return_value = draft
+        mu.get_root_maildir.return_value = str(tmp_path / "Mail")
+
+        def extract(message_path, part_index, target_dir):
+            out = Path(target_dir) / "plan.pdf"
+            out.write_bytes(b"%PDF")
+            return str(out)
+
+        mu.extract_attachment.side_effect = extract
+        return mu, draft
+
+    @pytest.mark.asyncio
+    async def test_editing_draft_keeps_original_until_saved(self, mock_config, tmp_path):
+        """Opening or cancelling a draft edit keeps the draft; saving replaces it."""
+        mu, draft = self._draft_mu(tmp_path)
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mu):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("e")
+                    await pilot.pause()
+                    mu.move.assert_not_called()
+
+                    await pilot.press("ctrl+l", "x", "y")
+                    await pilot.pause()
+                    mu.move.assert_not_called()
+
+                    await pilot.press("e")
+                    await pilot.pause()
+                    await pilot.press("ctrl+l", "d")
+                    await pilot.pause()
+
+        mu.move.assert_called_once_with(draft.path, "/Trash")
+        saved = list((tmp_path / "Mail" / "Drafts" / "cur").iterdir())
+        assert len(saved) == 1
+
+    @pytest.mark.asyncio
+    async def test_editing_draft_keeps_attachments_and_threading(self, mock_config, tmp_path):
+        mu, draft = self._draft_mu(tmp_path)
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mu):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("e")
+                    await pilot.pause()
+                    compose = app.query_one(ComposeWidget)
+                    assert [path.name for path in compose.attachments] == ["plan.pdf"]
+                    msg = compose._build_message()
+
+        assert msg["In-Reply-To"] == "<parent@example.com>"
+        assert msg["References"] == "<root@example.com> <parent@example.com>"
 
     @pytest.mark.asyncio
     async def test_ctrl_q_quits(self, mock_mu_interface, mock_config):

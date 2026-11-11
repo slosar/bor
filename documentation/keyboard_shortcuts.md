@@ -46,7 +46,7 @@ Complete reference of all keyboard shortcuts in Bor email reader.
 | R | Reply to message |
 | F | Forward message |
 | C | Compose new message |
-| E | Edit draft (only in the Drafts folder; the original draft is moved to Trash as soon as the editor opens) |
+| E | Edit draft (only in the Drafts folder; the original is moved to Trash once the edited version is saved or sent) |
 | M | Mark/unmark message |
 | X | Archive message(s) (with y/n confirmation) |
 | A | Apply flag (U/N/F to add, Shift+U/N/F to remove) |
@@ -182,7 +182,7 @@ The URL picker shows and opens the first 9 URLs. If a message has more than 9 UR
 |-----|--------|
 | Ctrl+L L | Send message |
 | Ctrl+L D | Save as draft |
-| Ctrl+L X | Cancel — closes the tab immediately, without confirmation; unsent text is discarded |
+| Ctrl+L X | Cancel, after a y/n confirmation (an edited draft stays in Drafts unchanged) |
 | Ctrl+L T/C/B/S/E | Jump to To/CC/BCC/Subject/Editor field |
 | Ctrl+L A | Attach file (with path completion) |
 | Ctrl+L Z | Attach several files from a directory (opens a picker) |

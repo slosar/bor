@@ -176,7 +176,7 @@ bor
 | Tab | Autocomplete address/text |
 | Ctrl+L L | Send message |
 | Ctrl+L D | Save draft |
-| Ctrl+L X | Cancel (no confirmation) |
+| Ctrl+L X | Cancel (asks to confirm) |
 | Ctrl+L A | Attach file |
 | Ctrl+L Z | Attach many files from a directory |
 | Ctrl+I | Insert file (terminals that distinguish Ctrl+I from Tab, e.g. kitty) |
