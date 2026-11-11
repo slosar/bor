@@ -7,29 +7,27 @@ Displays and manages email attachments.
 from __future__ import annotations
 
 import base64
-import mimetypes
 import os
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Vertical, Horizontal, ScrollableContainer
-from textual.widgets import Static, Label, Button, DataTable, ListView, ListItem
+from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.widgets import Label, ListItem, ListView, Static
 
-from bor.tabs.base import BaseTab
-from bor.mu import EmailMessage
 from bor.config import Config, get_config
+from bor.mu import EmailMessage
+from bor.tabs.base import BaseTab
 
 
 class AttachmentItem(ListItem):
     """List item representing an attachment."""
 
-    def __init__(self, index: int, attachment: Dict[str, Any], **kwargs) -> None:
+    def __init__(self, index: int, attachment: dict[str, Any], **kwargs) -> None:
         """
         Initialize attachment list item.
 
@@ -107,7 +105,7 @@ def _kitty_image_size_params(img_w: int, img_h: int, avail_cols: int, avail_rows
     return f",r={avail_rows}"
 
 
-def _supports_kitty_graphics(config: Optional[Config] = None) -> bool:
+def _supports_kitty_graphics(config: Config | None = None) -> bool:
     """Return whether Kitty graphics support should be used."""
     if config is None:
         config = get_config()
@@ -128,7 +126,7 @@ class AttachmentPreview(ScrollableContainer):
         text-style: bold;
         margin-bottom: 1;
     }
-    
+
     AttachmentPreview #image-placeholder {
         height: auto;
         min-height: 10;
@@ -140,7 +138,7 @@ class AttachmentPreview(ScrollableContainer):
         super().__init__(**kwargs)
         self._content: str = "Select an attachment to preview"
         self._title: str = ""
-        self._current_image_path: Optional[Path] = None
+        self._current_image_path: Path | None = None
         self._image_id_counter: int = 0
 
     def compose(self) -> ComposeResult:
@@ -189,30 +187,32 @@ class AttachmentPreview(ScrollableContainer):
         self._title = title
         self._current_image_path = image_path
         self.query_one("#preview-title", Label).update(title)
-        
+
         # Display a placeholder and trigger image render
         self.query_one("#preview-content", Static).update(
             f"[Image: {title}]\n\n"
             "Press Enter to open with system viewer\n"
             "Press 's' to save to disk"
         )
-        
+
         # Render the image using Kitty graphics after a brief delay
         self.call_later(self._render_kitty_image)
 
     def _render_kitty_image(self) -> None:
         """Render the current image using Kitty's graphics protocol."""
+        if not self.is_on_screen:
+            return
         if not self._current_image_path or not self._current_image_path.exists():
             return
-        
+
         if not _supports_kitty_graphics():
             return
-        
+
         try:
             # Read the image file
             with open(self._current_image_path, "rb") as f:
                 image_data = f.read()
-            
+
             # Kitty graphics protocol only supports PNG natively (f=100)
             # For JPEG and other formats, we need to convert to PNG first
             # Check if it's PNG by magic bytes
@@ -220,8 +220,9 @@ class AttachmentPreview(ScrollableContainer):
             if image_data[:4] != b'\x89PNG':
                 # Try to convert to PNG using PIL if available
                 try:
-                    from PIL import Image
                     import io
+
+                    from PIL import Image
 
                     # Open image and convert to PNG
                     img = Image.open(io.BytesIO(image_data))
@@ -248,7 +249,7 @@ class AttachmentPreview(ScrollableContainer):
                             return  # Can't convert, skip
                     except (subprocess.TimeoutExpired, FileNotFoundError):
                         return  # ImageMagick not available
-            
+
             # Get image dimensions from PNG data (we converted to PNG above)
             # PNG dimensions are at bytes 16-24 (width: 16-20, height: 20-24)
             if img_width == 0 or img_height == 0:
@@ -268,40 +269,40 @@ class AttachmentPreview(ScrollableContainer):
             # Determine size parameters: show at natural pixel size if it fits,
             # otherwise scale down preserving aspect ratio.
             size_params = _kitty_image_size_params(img_width, img_height, avail_cols, avail_rows)
-            
+
             # Position cursor at the image location (inside the container)
             left = container_region.x + 2
             top = container_region.y + 4  # +4 for border, padding, title
-            
+
             # Build the Kitty graphics escape sequence
             # Format: ESC_G<key>=<value>,...;<base64 data>ESC\
             # a=T means transmit and display
             # f=100 means PNG format
             # c=cols, r=rows for size in cells
             # q=2 means suppress responses
-            
+
             # First, position the cursor
             cursor_pos = f"\033[{top};{left}H"
-            
+
             # Send the image in chunks (Kitty protocol requires chunking for large images)
             chunk_size = 4096
             chunks = [encoded[i:i+chunk_size] for i in range(0, len(encoded), chunk_size)]
-            
+
             # Use a unique image ID to avoid caching issues
             self._image_id_counter += 1
             img_id = self._image_id_counter % 255 + 1  # Keep ID in range 1-255
-            
+
             # Write directly to terminal (bypass Textual's output)
             with open("/dev/tty", "w") as tty:
                 # First delete any previous image with this ID
                 tty.write(f"\033_Ga=d,d=I,i={img_id}\033\\")
-                
+
                 tty.write(cursor_pos)
-                
+
                 for i, chunk in enumerate(chunks):
                     # m=1 means more chunks coming, m=0 means last chunk
                     more = 1 if i < len(chunks) - 1 else 0
-                    
+
                     if i == 0:
                         # First chunk includes all the parameters
                         # i=<id> assigns an image ID
@@ -309,15 +310,23 @@ class AttachmentPreview(ScrollableContainer):
                     else:
                         # Subsequent chunks just have m parameter and image ID
                         tty.write(f"\033_Gi={img_id},m={more};{chunk}\033\\")
-                
+
                 tty.flush()
-                
+
         except Exception:
             pass
 
-    def clear_image(self) -> None:
-        """Clear any displayed Kitty image."""
-        self._current_image_path = None
+    def on_hide(self, event: events.Hide) -> None:
+        """Hide the terminal graphic without forgetting the selected image."""
+        self._delete_kitty_image()
+
+    def on_show(self, event: events.Show) -> None:
+        """Restore the selected image after the preview becomes visible."""
+        if self._current_image_path is not None:
+            self.call_later(self._render_kitty_image)
+
+    def _delete_kitty_image(self) -> None:
+        """Delete terminal graphics while retaining the preview state."""
         if _supports_kitty_graphics():
             try:
                 # Clear all images using Kitty graphics protocol
@@ -327,6 +336,11 @@ class AttachmentPreview(ScrollableContainer):
                     tty.flush()
             except Exception:
                 pass
+
+    def clear_image(self) -> None:
+        """Clear any displayed Kitty image."""
+        self._current_image_path = None
+        self._delete_kitty_image()
 
 
 class AttachmentsWidget(BaseTab):
@@ -389,9 +403,9 @@ class AttachmentsWidget(BaseTab):
         """
         super().__init__(*args, **kwargs)
         self.message = message
-        self.attachments: List[Dict[str, Any]] = message.attachments
+        self.attachments: list[dict[str, Any]] = message.attachments
         self._selected_index: int = 0
-        self._temp_dir: Optional[Path] = None
+        self._temp_dir: Path | None = None
 
     def compose(self) -> ComposeResult:
         """Create the widget layout."""
@@ -429,7 +443,7 @@ class AttachmentsWidget(BaseTab):
             preview.clear_image()
         except Exception:
             pass
-        
+
         if self._temp_dir and self._temp_dir.exists():
             import shutil
             try:
@@ -443,7 +457,7 @@ class AttachmentsWidget(BaseTab):
             self._temp_dir = Path(tempfile.mkdtemp(prefix="bor_attach_"))
         return self._temp_dir
 
-    def _extract_attachment(self, index: int) -> Optional[Path]:
+    def _extract_attachment(self, index: int) -> Path | None:
         """
         Extract an attachment to a temporary file.
 
@@ -570,7 +584,7 @@ class AttachmentsWidget(BaseTab):
             preview = self.query_one("#preview", AttachmentPreview)
             preview.show_message("Could not extract attachment")
 
-    def _save_attachment(self, index: int, target_dir: Optional[str] = None) -> Optional[Path]:
+    def _save_attachment(self, index: int, target_dir: str | None = None) -> Path | None:
         """
         Save an attachment to disk.
 
@@ -587,7 +601,7 @@ class AttachmentsWidget(BaseTab):
         attach = self.attachments[index]
         # Use the MIME part index from mu, not our list index
         part_index = attach.get("part_index", index + 1)
-        
+
         config = get_config()
         save_dir = Path(target_dir or config.attachments.save_directory).expanduser()
         save_dir.mkdir(parents=True, exist_ok=True)
