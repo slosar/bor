@@ -112,6 +112,9 @@ unread = "blue"
 important = "dark_orange"
 ```
 
+A value Rich cannot parse (e.g. `orange`; Rich's name is `orange1`) is replaced
+by the default, with a warning at startup.
+
 The options `marked`, `header` and `quoted` are also accepted but currently have
 no effect (marked messages are shown with `display.flag_marked` instead). Note
 the key is `important`, not `flagged`.

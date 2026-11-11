@@ -10,6 +10,9 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any
 
+from rich.errors import StyleSyntaxError
+from rich.style import Style
+
 try:
     import tomllib
 except ImportError:
@@ -194,7 +197,31 @@ class Config:
             known = {key: option for key, option in value.items() if key in options}
             setattr(config, name, type(current)(**known))
 
+        _check_colors(config)
         return config
+
+
+# [colors] options that are applied as Rich styles to message-list rows
+_ROW_COLOR_OPTIONS = ("unread", "important")
+
+
+def _check_colors(config: Config) -> None:
+    """Replace row colors Rich cannot parse with the defaults, recording a warning.
+
+    An invalid color (e.g. "orange"; Rich calls it "orange1") silently dropped
+    the row highlight, and used to crash the app when a row was re-rendered.
+    """
+    defaults = ColorsConfig()
+    for option in _ROW_COLOR_OPTIONS:
+        value = getattr(config.colors, option)
+        try:
+            Style.parse(f"bold {value}")
+        except (StyleSyntaxError, TypeError):
+            fallback = getattr(defaults, option)
+            config.warnings.append(
+                f"Invalid color {value!r} for colors.{option}; using {fallback!r}"
+            )
+            setattr(config.colors, option, fallback)
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -329,4 +356,5 @@ def apply_config_overrides(config: Config, overrides: list[str]) -> Config:
         parsed_value = _parse_override_value(raw_value)
         setattr(section, option_name, parsed_value)
 
+    _check_colors(config)
     return config

@@ -217,3 +217,20 @@ async def test_app_shows_config_warnings():
     shown = [call.args[0] for call in notify.call_args_list]
     assert "Unknown config option general.bogus ignored" in shown
     assert "Unknown theme 'no-such-theme'; using 'textual-dark'" in shown
+
+
+def test_invalid_row_colors_fall_back_to_defaults():
+    config = Config.from_dict({"colors": {"important": "orange", "unread": "#00ff00"}})
+
+    assert config.colors.important == "dark_orange"
+    assert config.colors.unread == "#00ff00"
+    assert config.warnings == ["Invalid color 'orange' for colors.important; using 'dark_orange'"]
+
+
+def test_invalid_color_override_falls_back_to_default():
+    config = Config()
+
+    apply_config_overrides(config, ["colors.unread=nocolor"])
+
+    assert config.colors.unread == "blue"
+    assert config.warnings == ["Invalid color 'nocolor' for colors.unread; using 'blue'"]
