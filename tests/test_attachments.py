@@ -10,6 +10,18 @@ from bor.config import Config
 from bor.tabs.attachments import AttachmentPreview, _supports_kitty_graphics
 
 
+async def _pause_until(pilot, condition, attempts: int = 50) -> None:
+    """Pause until condition() holds.
+
+    Show/Hide events arrive with a screen refresh rather than on the next
+    message-loop turn, so a single pilot.pause() is not always enough.
+    """
+    for _ in range(attempts):
+        if condition():
+            return
+        await pilot.pause(0.02)
+
+
 def test_kitty_graphics_detected_from_term(monkeypatch):
     """Kitty graphics are enabled automatically in kitty."""
     monkeypatch.setenv("TERM", "xterm-kitty")
@@ -54,20 +66,20 @@ async def test_kitty_image_is_hidden_and_restored_when_switching_tabs(tmp_path):
                 preview = app.query_one(AttachmentPreview)
                 tabs = app.query_one(TabbedContent)
                 preview.show_image("image.png", image_path)
-                await pilot.pause()
+                await _pause_until(pilot, lambda: render.called)
                 render.assert_called_once_with()
 
                 render.reset_mock()
                 delete.reset_mock()
                 tabs.active = "other-tab"
-                await pilot.pause()
+                await _pause_until(pilot, lambda: delete.called)
 
                 delete.assert_called_once_with()
                 render.assert_not_called()
                 assert preview._current_image_path == image_path
 
                 tabs.active = "preview-tab"
-                await pilot.pause()
+                await _pause_until(pilot, lambda: render.called)
 
                 render.assert_called_once_with()
                 assert preview._current_image_path == image_path

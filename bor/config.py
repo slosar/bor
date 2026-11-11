@@ -17,6 +17,7 @@ except ImportError:
 
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "bor.conf"
+MAILRC_PATH = Path.home() / ".mailrc"
 
 
 @dataclass
@@ -208,14 +209,13 @@ def load_mailrc_aliases() -> dict[str, str]:
     Returns:
         Dictionary mapping alias names to email addresses.
     """
-    mailrc_path = Path.home() / ".mailrc"
     aliases: dict[str, str] = {}
 
-    if not mailrc_path.exists():
+    if not MAILRC_PATH.exists():
         return aliases
 
     try:
-        with open(mailrc_path) as f:
+        with open(MAILRC_PATH) as f:
             for line in f:
                 line = line.strip()
                 if line.startswith("alias "):

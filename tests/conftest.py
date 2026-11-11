@@ -5,6 +5,23 @@ import os
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _isolate_user_files(tmp_path, monkeypatch):
+    """Keep tests away from the user's real config, ~/.mailrc and search history.
+
+    Widgets read configuration through the global `get_config()`, so without
+    this every app test silently loaded ~/.config/bor.conf, and pressing Enter
+    in a search prompt appended to the real search history.
+    """
+    import bor.config as config_module
+    import bor.tabs.message_index as index_module
+
+    monkeypatch.setattr(config_module, "DEFAULT_CONFIG_PATH", tmp_path / "bor.conf")
+    monkeypatch.setattr(config_module, "MAILRC_PATH", tmp_path / ".mailrc")
+    monkeypatch.setattr(config_module, "_config", None)
+    monkeypatch.setattr(index_module, "_HISTORY_FILE", tmp_path / "search_history")
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _disable_gc_tuning():
     """Keep the app's GC tuning out of the test session.

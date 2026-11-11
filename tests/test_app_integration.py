@@ -252,8 +252,8 @@ class TestMessageView:
                     assert len(app._tabs) >= 0  # May or may not create tab depending on data
 
     @pytest.mark.asyncio
-    async def test_m_returns_to_index(self, mock_mu_interface, mock_config):
-        """Test that M returns to message index without closing tab."""
+    async def test_m_in_message_view_marks_and_keeps_tab(self, mock_mu_interface, mock_config):
+        """M in the message view marks the message in the index and keeps the tab open."""
         with patch('bor.app.get_config', return_value=mock_config):
             with patch('bor.app.MuInterface', return_value=mock_mu_interface):
                 from bor.app import BorApp
@@ -267,6 +267,9 @@ class TestMessageView:
                     await pilot.pause()
                     # Tab should still exist
                     assert len(app._tabs) == tab_count
+                    from bor.tabs.message_index import MessageIndexWidget
+
+                    assert 0 in app.query_one(MessageIndexWidget).marked_messages
 
     @pytest.mark.asyncio
     async def test_q_closes_tab(self, mock_mu_interface, mock_config):
