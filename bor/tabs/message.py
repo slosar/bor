@@ -883,27 +883,45 @@ class MessageViewWidget(BaseTab):
 
     def _move_and_advance(self, folder: str) -> None:
         """Move the displayed message to `folder`, then show the next one or close."""
+        # Pick the successor from the list as it is now: the index refresh
+        # below runs asynchronously, so the list still contains the message
+        # being moved for the rest of this call.
+        messages = self.bor_app._current_messages
+        position = self._position_in_index()
+        next_msg = None
+        if position is not None and position + 1 < len(messages):
+            next_msg = messages[position + 1]
+
         self.bor_app.mu.move(self._full_message.path, folder)
 
-        # Refresh the index to remove the moved message
-        self._refresh_index_after_move()
-
-        # Move to next message or close
-        if self.bor_app._current_index < len(self.bor_app._current_messages):
-            self._show_index_message(self.bor_app._current_index)
-        else:
+        if next_msg is None:
+            self._refresh_index_after_move()
             self.close_tab()
+            return
+
+        self._show_index_message(position + 1)
+        self._refresh_index_after_move()
 
     def _refresh_index_after_move(self) -> None:
         """Refresh the index after a message was moved/deleted."""
+        self.bor_app.run_worker(self._refresh_index_and_resync(), name="refresh-after-move")
+
+    async def _refresh_index_and_resync(self) -> None:
+        """Re-run the index query, then point the index cursor at this view's message."""
         from bor.tabs.message_index import MessageIndexWidget
 
         try:
             index_widget = self.bor_app.query_one(MessageIndexWidget)
-            # Run async refresh
-            asyncio.create_task(index_widget.search(index_widget.current_query))
         except Exception:
-            pass
+            return
+        await index_widget.search(index_widget.current_query)
+
+        # search() resets the shared cursor to the top; keep it on the message
+        # shown here so M, flags and N/P keep acting on the right row.
+        if self.is_mounted:
+            position = self._position_in_index()
+            if position is not None:
+                index_widget._restore_cursor(position)
 
     def action_delete(self) -> None:
         """Delete this message with confirmation."""

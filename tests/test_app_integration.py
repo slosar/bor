@@ -677,6 +677,76 @@ class TestQuit:
         assert msg["In-Reply-To"] == "<parent@example.com>"
         assert msg["References"] == "<root@example.com> <parent@example.com>"
 
+    @staticmethod
+    def _mailbox_mu(count=4):
+        """A mock mu whose find() reflects messages moved away by move()."""
+        store = create_mock_messages(count)
+        mu = MagicMock()
+        mu.find.side_effect = lambda *a, **k: list(store)
+        mu.find_contacts.return_value = []
+        mu.view.side_effect = lambda path, *a, **k: MockEmailMessage(
+            path=path, msgid=next(m.msgid for m in create_mock_messages(count) if m.path == path)
+        )
+
+        def move(path, folder):
+            store[:] = [m for m in store if m.path != path]
+            return f"{folder}/moved"
+
+        mu.move.side_effect = move
+        return mu
+
+    @pytest.mark.asyncio
+    async def test_archive_and_delete_in_message_view_advance(self, mock_config):
+        """X and D in the message view move the message and show the next one."""
+        from bor.tabs.message import MessageViewWidget
+
+        mu = self._mailbox_mu()
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mu):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    view = app.query_one(MessageViewWidget)
+
+                    await pilot.press("x", "y")
+                    await pilot.pause()
+                    await pilot.pause()
+                    assert mu.move.call_args_list[-1].args == ("/test/path/message0", "/Archive")
+                    assert view._message_ref.path == "/test/path/message1"
+                    # Once the index refresh lands, the shared cursor follows the view
+                    assert app._current_messages[app._current_index].path == "/test/path/message1"
+
+                    await pilot.press("d", "y")
+                    await pilot.pause()
+                    await pilot.pause()
+                    assert mu.move.call_args_list[-1].args == ("/test/path/message1", "/Trash")
+                    assert view._message_ref.path == "/test/path/message2"
+                    assert mu.move.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_archiving_last_message_in_view_closes_tab(self, mock_config):
+        """With no message after it, archiving from the view closes the tab."""
+        mu = self._mailbox_mu(2)
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mu):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("down", "enter")
+                    await pilot.pause()
+                    assert len(app._tabs) == 1
+                    await pilot.press("x", "y")
+                    await pilot.pause()
+                    await pilot.pause()
+                    assert mu.move.call_args_list[-1].args == ("/test/path/message1", "/Archive")
+                    assert len(app._tabs) == 0
+
     @pytest.mark.asyncio
     async def test_ctrl_q_quits(self, mock_mu_interface, mock_config):
         """Test that Ctrl+Q quits the application."""
