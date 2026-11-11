@@ -947,6 +947,31 @@ class TestQuit:
                     assert len(index.messages) == len(messages)
 
     @pytest.mark.asyncio
+    async def test_tab_cycles_within_compose_fields(self, mock_mu_interface, mock_config):
+        """Tab in the body wraps to To and Shift+Tab in To wraps to the body."""
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("c")
+                    await pilot.pause()
+                    await pilot.press("ctrl+l", "e")
+                    await pilot.press(*"hi ")
+                    body_text = app.query_one("#body-input").text
+
+                    await pilot.press("tab")
+                    await pilot.pause()
+                    assert app.focused.id == "to-input"
+                    assert app.query_one("#body-input").text == body_text
+
+                    await pilot.press("shift+tab")
+                    await pilot.pause()
+                    assert app.focused.id == "body-input"
+
+    @pytest.mark.asyncio
     async def test_ctrl_q_quits(self, mock_mu_interface, mock_config):
         """Test that Ctrl+Q quits the application."""
         with patch('bor.app.get_config', return_value=mock_config):

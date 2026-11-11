@@ -206,7 +206,7 @@ In To/CC/BCC fields:
 
 In body:
 - Type alias letter, press Tab to expand (configurable in [aliases])
-- Tab with no alias before the cursor moves focus out of the editor (to the tab bar)
+- Tab with no alias before the cursor moves to the To field (Shift+Tab in To comes back)
 
 In attachment path input:
 - Ctrl+K deletes to end of line; Esc cancels

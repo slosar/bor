@@ -403,6 +403,13 @@ class AddressInput(InputEditingMixin, HeaderNavigationMixin, CtrlLMixin, Input):
             self._completion_index = 0
             return
 
+        if event.key == "shift+tab" and self.id == "to-input":
+            # Wrap around to the body rather than leaving the form
+            self.query_ancestor(ComposeWidget).query_one("#body-input").focus()
+            event.prevent_default()
+            event.stop()
+            return
+
         if event.key == "tab":
             # Get the current word being typed
             value = self.value
@@ -749,6 +756,14 @@ class ComposeTextArea(CtrlLMixin, TextArea):
                         event.prevent_default()
                         event.stop()
                         return
+
+            # No alias to expand: wrap around to the To field. The default
+            # focus_next() would land on the tab strip, where typing and
+            # Ctrl+L do nothing.
+            self.query_ancestor(ComposeWidget).query_one("#to-input").focus()
+            event.prevent_default()
+            event.stop()
+            return
         # Anything not handled here falls through to TextArea's own _on_key.
 
 
