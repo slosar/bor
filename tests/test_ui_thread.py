@@ -159,3 +159,76 @@ async def test_blocking_work_stays_off_the_ui_thread(tmp_path: Path) -> None:
     assert smtp_threads and not any(smtp_threads)
     # The root-maildir lookup (`mu info`) is warmed up off the UI thread
     assert calls[[name for name, _ in calls].index("get_root_maildir")] == ("get_root_maildir", False)
+
+
+
+async def test_llm_tools_stay_off_the_ui_thread(tmp_path: Path) -> None:
+    """The model's search/read/thread calls run mu on worker threads too."""
+    import pytest
+
+    pytest.importorskip("openai")
+    from bor.mu import EmailAddress, EmailMessage
+    from tests.llm_fakes import FakeClient, text_response, tool_response
+
+    found = [
+        EmailMessage(
+            msgid=f"m{n}@x.org",
+            path=f"/mail/{n}",
+            subject=f"Budget {n}",
+            from_addr=EmailAddress(name="Ann", email="ann@x.org"),
+        )
+        for n in range(3)
+    ]
+    calls: list = []
+    view_marks: list = []
+
+    def recorded(name, result):
+        def side_effect(*args, **kwargs):
+            calls.append((name, _on_main_thread()))
+            if name == "view":
+                view_marks.append(kwargs.get("mark_as_read", True))
+            return result(*args, **kwargs)
+
+        return side_effect
+
+    mu = MagicMock()
+    mu.find.side_effect = recorded("find", lambda *a, **k: list(found))
+    mu.find_thread.side_effect = recorded("find_thread", lambda *a, **k: found[:2])
+    mu.view.side_effect = recorded(
+        "view",
+        lambda path, *a, **k: EmailMessage(**{**next(m for m in found if m.path == path).__dict__}),
+    )
+    mu.get_root_maildir.return_value = str(tmp_path)
+
+    client = FakeClient(
+        [
+            tool_response("search_mail", {"query": "budget"}, "c1"),
+            tool_response("read_message", {"id": "m1"}, "c2"),
+            tool_response("read_thread", {"id": "m2"}, "c3"),
+            text_response("Done."),
+        ]
+    )
+    config = Config()
+    config.llm.api_key = "test-key"
+    config.llm.context_file = str(tmp_path / "llm.md")
+    with patch("bor.app.get_config", return_value=config):
+        with patch("bor.app.MuInterface", return_value=mu):
+            with patch("bor.llm.session.make_client", return_value=client):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await app.workers.wait_for_complete()
+                    calls.clear()  # only the LLM's calls from here on
+                    app.open_llm("what about the budget?")
+                    await pilot.pause()
+                    await app.workers.wait_for_complete()
+                    await pilot.pause()
+                    kinds = [e.kind for e in app.llm.transcript]
+                    assert kinds.count("tool") == 3, app.llm.transcript
+
+    assert {name for name, _ in calls} == {"find", "view", "find_thread"}
+    assert [name for name, on_main in calls if on_main] == []
+    # Reading mail for the model never marks it read
+    assert view_marks and not any(view_marks)

@@ -41,6 +41,7 @@ dev = [
     "pytest-asyncio>=0.21.0",
     "ruff>=0.1.0",
     "mypy>=1.0.0",
+    "openai>=1.40.0",
 ]
 html = [
     "html2text>=2020.1.16",
@@ -51,9 +52,13 @@ images = [
 keyring = [
     "keyring>=23.0.0",
 ]
+llm = [
+    "openai>=1.40.0",
+]
 all = [
     "html2text>=2020.1.16",
     "keyring>=23.0.0",
+    "openai>=1.40.0",
     "Pillow>=9.0.0",
 ]
 

@@ -138,6 +138,20 @@ class EditorConfig:
 
 
 @dataclass
+class LLMConfig:
+    """LLM search assistant (any OpenAI-compatible endpoint, OpenRouter by default)."""
+
+    # Empty: use $OPENROUTER_API_KEY, then the keyring (service "bor-llm", user "api_key")
+    api_key: str = ""
+    model: str = "moonshotai/kimi-k2.6"
+    base_url: str = "https://openrouter.ai/api/v1"
+    # Your own notes for the model (glossary, roles, what folders mean)
+    context_file: str = "~/.config/bor/llm.md"
+    # Tool calls allowed while answering one question
+    max_tool_calls: int = 30
+
+
+@dataclass
 class Config:
     """Main configuration container."""
 
@@ -152,6 +166,7 @@ class Config:
     html: HtmlConfig = field(default_factory=HtmlConfig)
     attachments: AttachmentsConfig = field(default_factory=AttachmentsConfig)
     editor: EditorConfig = field(default_factory=EditorConfig)
+    llm: LLMConfig = field(default_factory=LLMConfig)
     aliases: dict[str, str] = field(default_factory=dict)
     email_aliases: dict[str, str] = field(default_factory=dict)
     # Problems found while loading, shown to the user once the app starts.

@@ -118,6 +118,29 @@ Small text-editing helpers shared by the inputs: clipboard copy (via the optiona
 `pyperclip`), emacs-style kill-line for `Input` and `TextArea`, and newline
 normalization.
 
+### bor/llm/
+
+The LLM assistant. Nothing here imports Textual widgets except lazily, and
+nothing changes the mailbox.
+
+- `tools.py` - `MailTools`: `search_mail`, `read_message` and `read_thread` over
+  `MuInterface`, in OpenAI function-calling format. They run on worker threads,
+  return text for the model plus a one-line summary for the transcript, never
+  raise, and read with `view(mark_as_read=False)`. `MessageHandles` gives the
+  model short names (`m1`, `m2`, ...) instead of Message-IDs. `strip_quoted()`
+  drops quoted replies and Outlook-style history from bodies.
+- `conversation.py` - `Conversation.ask()` streams a question, runs the tool
+  calls one at a time, loops until the model answers, and yields events
+  (`TextDelta`, `Thinking`, `ToolStarted`/`ToolFinished`, `TurnFinished` with
+  token use and cost). It passes reasoning back on tool-call turns, enforces
+  `max_tool_calls`, and rolls the history back if a question fails or is
+  cancelled.
+- `prompt.py` - The system prompt (identity, folders, mu query cheat sheet, the
+  user's notes file) and the context block sent with each question.
+- `session.py` - `LLMSession` on `BorApp.llm`: API key lookup, the conversation,
+  handles and transcript, so they outlive the LLM tab. `make_client()` builds the
+  `AsyncOpenAI` client (tests replace it).
+
 ### bor/app.py
 
 Main Textual application.
@@ -131,6 +154,7 @@ Key methods:
 - `close_tab()` - Close tab
 - `open_message()` - Open message in new tab
 - `open_compose()` - Open compose in new tab
+- `open_llm()` - Switch to the single LLM tab (creating it), optionally asking a question
 
 ### bor/tabs/
 
@@ -164,6 +188,11 @@ Tab widgets for different views.
 
 #### sync.py
 - `SyncWidget` - External command runner with output
+
+#### llm.py
+- `LLMWidget` - Chat transcript (questions, tool lines, Markdown answers, usage)
+  and the question line; runs one question at a time in a worker
+- `QuestionInput` - Question line with in-session Up/Down history
 
 ## Data Flow
 

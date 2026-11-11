@@ -22,6 +22,7 @@ from textual.widgets import Footer, Header, TabbedContent, TabPane
 
 from bor import __version__
 from bor.config import Config, apply_config_overrides, get_config, load_config, set_config
+from bor.llm.session import LLMSession
 from bor.mu import EmailMessage, MuInterface
 from bor.tabs.base import BaseTab
 
@@ -151,6 +152,8 @@ class BorApp(App):
             )
             self.theme = "textual-dark"
         self.mu: MuInterface = MuInterface()
+        # Conversation with the LLM; outlives the LLM tab
+        self.llm: LLMSession = LLMSession(self.mu, self.config)
         self._tab_counter: int = 0
         self._tabs: dict[str, TabPane] = {}
         self._tab_order: list[str] = []
@@ -524,6 +527,20 @@ class BorApp(App):
 
         widget = SyncWidget(self.config.sync.command)
         self.add_tab("Sync", widget)
+
+    def open_llm(self, question: str | None = None) -> None:
+        """Switch to the LLM tab (opening it if needed), optionally asking `question`."""
+        from bor.tabs.llm import LLMWidget
+
+        for tab_id, pane in self._tabs.items():
+            for child in pane.walk_children():
+                if isinstance(child, LLMWidget):
+                    self.query_one(BorTabbedContent).active = tab_id
+                    self.call_later(self._focus_active_tab)
+                    if question:
+                        child.ask(question)
+                    return
+        self.add_tab("LLM", LLMWidget(initial_question=question))
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:

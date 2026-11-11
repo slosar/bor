@@ -434,6 +434,7 @@ class MessageIndexWidget(BaseTab):
         Binding("o", "show_archive", "Archive"),
         Binding("u", "show_drafts", "Drafts"),
         Binding("l", "sync", "Sync"),
+        Binding("q", "open_llm", "Ask LLM"),
         Binding("m", "mark_message", "Mark"),
         Binding("x", "archive", "Archive Msg"),
         Binding("a", "apply_flag", "Apply Flag"),
@@ -888,6 +889,10 @@ class MessageIndexWidget(BaseTab):
     def action_sync(self) -> None:
         """Run synchronization."""
         self.bor_app.open_sync()
+
+    def action_open_llm(self) -> None:
+        """Switch to the LLM tab."""
+        self.bor_app.open_llm()
 
     async def action_refresh(self) -> None:
         """Refresh the message index (re-run current search after mu index)."""

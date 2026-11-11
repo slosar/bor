@@ -29,6 +29,7 @@ Bor uses [mu](https://djcbsoftware.nl/code/mu/) for email access under the hood 
 - **Tab-based workflow** 
 - **Configurable** via TOML configuration file
 - **HTML email support** via html2text rendering
+- **LLM mail search** (optional): ask questions about your mail in plain language; the model searches and reads it through mu (read-only) via any OpenAI-compatible API such as OpenRouter
 
 ## Requirements
 
@@ -145,6 +146,7 @@ bor
 | T | Toggle threading |
 | Ctrl+T | Show thread |
 | L | Sync |
+| Q | Ask the LLM about your mail |
 | Z | Undo move |
 | Ctrl+R | Refresh index |
 
@@ -241,6 +243,11 @@ bor/
 ├── ical.py           # Calendar invite parsing
 ├── mu.py             # Mu interface
 ├── profiling.py      # UI latency profiler (python -m bor.profiling)
+├── llm/
+│   ├── conversation.py  # Tool-calling loop over an OpenAI-compatible API
+│   ├── prompt.py     # System prompt and per-question context
+│   ├── session.py    # App-wide LLM state
+│   └── tools.py      # Read-only mail tools (search, read, thread)
 └── tabs/
     ├── __init__.py
     ├── base.py       # Base tab class
@@ -248,6 +255,7 @@ bor/
     ├── message.py
     ├── compose.py
     ├── attachments.py
+    ├── llm.py        # LLM chat tab
     └── sync.py
 ```
 

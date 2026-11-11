@@ -85,6 +85,12 @@ In the search prompt:
 | L | Run synchronization command |
 | Ctrl+R | Refresh mu index and message list |
 
+### LLM
+
+| Key | Action |
+|-----|--------|
+| Q | Open the LLM tab (or switch to it) to ask about your mail |
+
 ## Message View
 
 ### Navigation
@@ -225,6 +231,25 @@ In attachment path input:
 
 After a successful sync Bor runs `mu index`, refreshes the message index, and
 closes the Sync tab automatically. On failure the tab stays open with the output.
+
+## LLM Tab
+
+Ask questions about your mail; the model searches and reads it (read-only) and
+answers in the tab. See the `[llm]` section in [configuration.md](configuration.md).
+
+| Key | Action |
+|-----|--------|
+| Enter | Ask the question |
+| ↑ / ↓ | Browse earlier questions |
+| Ctrl+K | Delete to end of line (copied to clipboard) |
+| PageUp / PageDown | Scroll the conversation |
+| Esc | Cancel the question being answered; otherwise return to the index |
+| Ctrl+N | Start a new conversation |
+
+Each step the model takes (a search, reading a message or a thread) is shown as
+a dim line, followed by the answer and its token use and cost. You can switch
+to other tabs while it works; a notification says when the answer is ready.
+The conversation lasts until `Ctrl+N` or quitting Bor (closing the tab keeps it).
 
 ## Tips
 

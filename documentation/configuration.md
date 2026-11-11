@@ -217,6 +217,46 @@ force_kitty_support = false
 Non-PNG images are converted for preview with Pillow (`pip install bormail[images]`)
 or, failing that, ImageMagick's `convert`.
 
+### [llm]
+
+The LLM assistant (`Q` in the message index) uses any OpenAI-compatible chat API
+with tool calling; the default is [OpenRouter](https://openrouter.ai). It needs
+the `openai` package: `pip install 'bormail[llm]'`.
+
+```toml
+[llm]
+# API key. If empty, the OPENROUTER_API_KEY environment variable is used, then the
+# system keyring (service "bor-llm", user "api_key").
+api_key = "sk-or-..."
+
+# Model id at the provider (OpenRouter ids look like "vendor/model")
+model = "moonshotai/kimi-k2.6"
+
+# Any OpenAI-compatible endpoint, e.g. "http://localhost:11434/v1" for Ollama
+base_url = "https://openrouter.ai/api/v1"
+
+# Your notes for the model, appended to its instructions: a glossary of
+# abbreviations, your roles, what your folders hold. Missing file = no notes.
+context_file = "~/.config/bor/llm.md"
+
+# Tool calls (searches and reads) allowed while answering one question
+max_tool_calls = 30
+```
+
+The model can only search and read mail: it cannot send, move, flag or change
+anything, and reading a message for it does not mark the message read. The text
+of the messages it reads is sent to the provider.
+
+Search quality depends a lot on the model knowing your vocabulary. A notes file
+such as
+
+```markdown
+- PDR = preliminary design review; LN2 = liquid nitrogen
+- Mail from @lab.example.org is from my own group; "the review" means the annual program review
+```
+
+helps it search for what you mean.
+
 ### [aliases]
 
 Text aliases for quick insertion in compose mode. Press the letter followed by Tab to expand.
@@ -310,5 +350,6 @@ file equivalent.
 
 | Variable | Effect |
 |----------|--------|
+| `OPENROUTER_API_KEY` | API key for the LLM assistant when `[llm] api_key` is empty. |
 | `BOR_NO_GC_TUNING` | Set to `1` to stop Bor from freezing the startup object graph and raising the garbage-collection thresholds after the inbox loads. The tuning trades a small amount of resident memory for shorter pauses; disable it when investigating memory growth, since the frozen generation is never rescanned. |
 | `BORPROF_LOG` | Path for the UI latency profiler's log (default `/tmp/borprof.jsonl`). See `python -m bor.profiling` in [architecture.md](architecture.md#profiling). |

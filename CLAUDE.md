@@ -79,6 +79,8 @@ BorApp (Textual app)
 | `bor/tabs/sync.py` | `SyncWidget` — run arbitrary external sync command with live output |
 | `bor/editing.py` | Clipboard and kill-line helpers shared by the input widgets |
 | `bor/ical.py` | `text/calendar` invite parsing into `CalendarEvent` |
+| `bor/llm/` | LLM assistant: read-only mail tools, tool-calling conversation over an OpenAI-compatible API, prompt, app-wide session |
+| `bor/tabs/llm.py` | `LLMWidget` — chat tab for the LLM assistant |
 
 ### Tab System
 

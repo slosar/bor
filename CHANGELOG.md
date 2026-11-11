@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **LLM mail assistant.** `Q` in the message index opens an LLM tab where you ask about your mail in plain language ("summarize the emails about the job search"). The model searches with mu queries and reads messages and whole threads through read-only tools, showing each step, then answers in Markdown with the token use and cost. It works with any OpenAI-compatible API; the default is OpenRouter with `moonshotai/kimi-k2.6`. Configure it in the new `[llm]` section (API key, model, endpoint, a notes file with your own glossary, tool-call limit); install with `pip install 'bormail[llm]'`. Reading mail for the model does not mark it read.
+
 ## [1.1]
 
 ### Changed
