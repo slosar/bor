@@ -24,3 +24,9 @@ Thumbs.db
 
 # Local config
 bor.conf
+
+# Local agent working files (kept on disk, not in the repository)
+SERVER_LOGGING.md
+VERIFICATION_COMPLETE.md
+.codex
+agents/mail
