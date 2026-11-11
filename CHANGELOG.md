@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.1]
 
+### Changed
+- Internal cleanup with no change in behavior: removed dead code (unused `BorApp` state and helpers, the unused `MessageBody` widget, an unused kitty `icat` helper, App CSS rules matching no widget, unused imports); de-duplicated the flag-application logic shared by the index and message view (`apply_flag()`), message-view next/previous and archive/delete, Ctrl+L command dispatch, single-line input clipboard/`Ctrl+K` handling, MIME part decoding in `MuInterface.view()`, and `Config.from_dict()`; removed `super()._on_key()` calls in the compose inputs that only created never-awaited coroutines (Textual already dispatches the base handler).
+- Documentation brought in line with the code: corrected the `[colors]` keys and defaults (`important`, not `flagged`; `orange` is not a valid color), marked accepted-but-unused options (`display.columns`, `html.renderer`, `threading.indicator`, ...), explained that the sync command is not run through a shell, clarified SMTP TLS options, fixed the Sync tab keys (`X`/`M`, not `Q`/`<`), and documented that `Ctrl+L X` cancels without confirmation, plus previously undocumented keys (`Ctrl+L Z`, `Ctrl+K`, search history).
+
 ### Fixed
 - Fixed newly sent messages not appearing in their saved folder (including Archive when the sent folder is configured there) until a manual `Ctrl+R` refresh. Messages saved to a Maildir are now queued for mu indexing immediately, and subsequent folder searches wait for that update to finish.
 - Fixed file-path Tab completion (e.g. the compose attachment prompt) not extending the input to the longest shared prefix when matching files differ only in case. Matching is case-insensitive, but the shared-prefix computation was case-sensitive, so typing `LN_Up` with both `LN_Updates_…` and `LN_updates_…` present collapsed the common prefix below the typed text and Tab only listed completions without filling anything in. The shared prefix is now computed case-insensitively while preserving the actual file casing.

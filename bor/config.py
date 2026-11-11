@@ -6,8 +6,7 @@ Handles loading and parsing of the configuration file from ~/.config/bor.conf
 
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -152,45 +151,16 @@ class Config:
             Config instance with all settings populated
         """
         config = cls()
-
-        if "general" in data:
-            config.general = GeneralConfig(**data["general"])
-
-        if "folders" in data:
-            config.folders = FoldersConfig(**data["folders"])
-
-        if "smtp" in data:
-            config.smtp = SmtpConfig(**data["smtp"])
-
-        if "identity" in data:
-            config.identity = IdentityConfig(**data["identity"])
-
-        if "colors" in data:
-            config.colors = ColorsConfig(**data["colors"])
-
-        if "sync" in data:
-            config.sync = SyncConfig(**data["sync"])
-
-        if "threading" in data:
-            config.threading = ThreadingConfig(**data["threading"])
-
-        if "display" in data:
-            config.display = DisplayConfig(**data["display"])
-
-        if "html" in data:
-            config.html = HtmlConfig(**data["html"])
-
-        if "attachments" in data:
-            config.attachments = AttachmentsConfig(**data["attachments"])
-
-        if "editor" in data:
-            config.editor = EditorConfig(**data["editor"])
-
-        if "aliases" in data:
-            config.aliases = data["aliases"]
-
-        if "email_aliases" in data:
-            config.email_aliases = data["email_aliases"]
+        for section in fields(cls):
+            if section.name not in data:
+                continue
+            current = getattr(config, section.name)
+            if is_dataclass(current):
+                # Unknown keys raise TypeError, which load_config() reports.
+                setattr(config, section.name, type(current)(**data[section.name]))
+            else:
+                # Free-form tables such as [aliases] and [email_aliases]
+                setattr(config, section.name, data[section.name])
 
         return config
 

@@ -8,7 +8,7 @@ I used to use pine and later its derivatives (alpine, realpine) until it became 
 
 A few years ago I switched away from emacs to VSCode and with the advent of AI coding I finally bite the bullet and made my very own mail client that works exactly the way I want it. Think of bor as pine dragged (by its feet) into 2025.
 
-Bor uses [mu](https://djcbsoftware.nl/code/mu/) for email access under the hoold and [Textual](https://textual.textualize.io/) for the user interface.
+Bor uses [mu](https://djcbsoftware.nl/code/mu/) for email access under the hood and [Textual](https://textual.textualize.io/) for the user interface.
 
 ## Some screenshots
 
@@ -42,7 +42,7 @@ Bor uses [mu](https://djcbsoftware.nl/code/mu/) for email access under the hoold
 ## Known issues
 
 - no support for folders. You can mu search with maildir:/folder, but all archived messages go to the archived folder. This is how my work-flow works. Feel free to add and make pull request.
-- Clicking with mouse on the link does not work. For emails with one or two links, 'O' shortcut is preferrable, but for complex long messages, clicking on the link would be better.
+- Clicking with mouse on the link does not work. For emails with one or two links, 'O' shortcut is preferable, but for complex long messages, clicking on the link would be better.
 
 ## Installation
 
@@ -56,14 +56,11 @@ pip install bormail
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-repo/bor.git
+git clone https://github.com/slosar/bor.git
 cd bor
 
-# Install with pip
-pip install -e .
-
-# Or install dependencies manually
-pip install textual tomli html2text
+# Install with pip (add [all] for html2text, keyring and Pillow)
+pip install -e ".[all]"
 ```
 
 ### Dependencies
@@ -168,6 +165,7 @@ bor
 | D | Delete |
 | A | Apply flag |
 | O | Open URL (if multiple, pick [1-9]) |
+| V | View message in browser |
 | Z | View attachments |
 | Ctrl+R | Toggle full headers |
 
@@ -178,10 +176,10 @@ bor
 | Tab | Autocomplete address/text |
 | Ctrl+L L | Send message |
 | Ctrl+L D | Save draft |
-| Ctrl+L X | Cancel |
+| Ctrl+L X | Cancel (no confirmation) |
 | Ctrl+L A | Attach file |
 | Ctrl+L Z | Attach many files from a directory |
-| Ctrl+I | Insert file |
+| Ctrl+I | Insert file (terminals that distinguish Ctrl+I from Tab, e.g. kitty) |
 
 `Ctrl+L A` opens a file-path prompt with bash-like tab completion: one match completes
 immediately, multiple matches are listed without forcing a choice, and the input expands only
@@ -229,10 +227,6 @@ date:1w..now
 from:john subject:meeting flag:unread
 ```
 
-## License
-
-MIT. See [LICENSE](LICENSE).
-
 See the [mu query documentation](https://djcbsoftware.nl/code/mu/mu4e/Queries.html) for more.
 
 ## Development
@@ -244,7 +238,10 @@ bor/
 ├── __init__.py       # Package init
 ├── app.py            # Main Textual application
 ├── config.py         # Configuration handling
+├── editing.py        # Shared text-editing / clipboard helpers
+├── ical.py           # Calendar invite parsing
 ├── mu.py             # Mu interface
+├── profiling.py      # UI latency profiler (python -m bor.profiling)
 └── tabs/
     ├── __init__.py
     ├── base.py       # Base tab class

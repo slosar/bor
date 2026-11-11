@@ -9,24 +9,20 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional
 
 from textual import events
 from textual.app import App, ComposeResult, InvalidThemeError
 from textual.binding import Binding
-from textual.containers import Container
-from textual.widgets import TabbedContent, TabPane, Footer, Header
+from textual.widgets import Footer, Header, TabbedContent, TabPane
 
 from bor import __version__
-from bor.config import get_config, Config, load_config, set_config, apply_config_overrides
-from bor.mu import MuInterface, EmailMessage
+from bor.config import Config, apply_config_overrides, get_config, load_config, set_config
+from bor.mu import EmailMessage, MuInterface
 from bor.tabs.base import BaseTab
-
-if TYPE_CHECKING:
-    pass
-
 
 # Alt+digit unicode character mapping (varies by OS/terminal)
 ALT_DIGIT_MAP = {
@@ -88,11 +84,7 @@ def _tune_gc() -> None:
 
 
 class BorTabbedContent(TabbedContent):
-    """Extended TabbedContent with tab change notifications."""
-
-    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
-        """Handle tab activation."""
-        pass
+    """The app's TabbedContent; a distinct type so it can be queried unambiguously."""
 
 
 class BorApp(App):
@@ -118,69 +110,11 @@ class BorApp(App):
         height: 1fr;
     }
 
-    .header-row {
-        height: auto;
-        padding: 0 1;
-        background: $surface;
-    }
-
-    .message-list {
-        height: 1fr;
-    }
-
-    .message-row {
-        height: 1;
-    }
-
-    .message-row.unread {
-        color: $primary;
-    }
-
-    .message-row.important {
-        color: $warning;
-    }
-
-    .message-row.marked {
-        background: $primary-darken-1;
-    }
-
     .status-bar {
         height: 1;
         dock: bottom;
         background: $surface;
         padding: 0 1;
-    }
-
-    .search-input {
-        width: 100%;
-        height: 1;
-    }
-
-    MessageView {
-        height: 1fr;
-    }
-
-    .message-header {
-        background: $surface;
-        padding: 1;
-    }
-
-    .message-body {
-        height: 1fr;
-        padding: 1;
-    }
-
-    ComposeView {
-        height: 1fr;
-    }
-
-    .compose-header {
-        height: auto;
-        padding: 1;
-    }
-
-    .compose-body {
-        height: 1fr;
     }
 
     Input {
@@ -220,10 +154,10 @@ class BorApp(App):
         self._tab_counter: int = 0
         self._tabs: Dict[str, TabPane] = {}
         self._tab_order: List[str] = []
+        # The message list shown in the index and the cursor position within
+        # it; message views use these for N/P navigation.
         self._current_messages: List[EmailMessage] = []
         self._current_index: int = 0
-        self._marked_messages: set = set()
-        self._threading_enabled: bool = self.config.threading.enabled
         self._active_tab_id: str = "tab-0"
 
     def compose(self) -> ComposeResult:
@@ -391,24 +325,20 @@ class BorApp(App):
 
     def action_prev_tab(self) -> None:
         """Switch to the previous tab."""
-        tabs = self.query_one(BorTabbedContent)
-        tab_ids = self._ordered_tab_ids()
-        current = tabs.active or "tab-0"
-        if current in tab_ids:
-            idx = tab_ids.index(current)
-            new_idx = (idx - 1) % len(tab_ids)
-            tabs.active = tab_ids[new_idx]
-            self.call_later(lambda: self._focus_active_tab())
+        self._cycle_tab(-1)
 
     def action_next_tab(self) -> None:
         """Switch to the next tab."""
+        self._cycle_tab(1)
+
+    def _cycle_tab(self, step: int) -> None:
+        """Activate the tab `step` positions away, wrapping around."""
         tabs = self.query_one(BorTabbedContent)
         tab_ids = self._ordered_tab_ids()
         current = tabs.active or "tab-0"
         if current in tab_ids:
             idx = tab_ids.index(current)
-            new_idx = (idx + 1) % len(tab_ids)
-            tabs.active = tab_ids[new_idx]
+            tabs.active = tab_ids[(idx + step) % len(tab_ids)]
             self.call_later(lambda: self._focus_active_tab())
 
     def add_tab(self, title: str, widget: "BaseTab", replace_id: Optional[str] = None) -> str:
@@ -486,7 +416,6 @@ class BorApp(App):
 
         if tab_id in self._tabs:
             tabs = self.query_one(BorTabbedContent)
-            pane = self._tabs[tab_id]
             # Use remove_pane to properly remove both the tab button and pane
             tabs.remove_pane(tab_id)
             del self._tabs[tab_id]
@@ -507,32 +436,21 @@ class BorApp(App):
         """
         from bor.tabs.message import MessageViewWidget
 
-        # If replacing a tab, just open the message in that slot
-        if replace_tab:
-            import hashlib
-            safe_id = hashlib.md5(message.path.encode()).hexdigest()[:12]
-            widget = MessageViewWidget(message, id=f"msg-{safe_id}")
-            title = message.subject[:20] + "..." if len(message.subject) > 20 else message.subject
-            self.add_tab(title, widget, replace_id=replace_tab)
-            return
+        if not replace_tab:
+            # Switch to an existing tab already showing this message, if any
+            for tab_id, pane in self._tabs.items():
+                for child in pane.walk_children():
+                    if isinstance(child, MessageViewWidget):
+                        if child.message and child.message.path == message.path:
+                            tabs = self.query_one(BorTabbedContent)
+                            tabs.active = tab_id
+                            return
 
-        # Find if we already have a tab for this message
-        for tab_id, pane in self._tabs.items():
-            # Check if any child is a MessageViewWidget with same message
-            for child in pane.walk_children():
-                if isinstance(child, MessageViewWidget):
-                    if child.message and child.message.path == message.path:
-                        # Switch to existing tab
-                        tabs = self.query_one(BorTabbedContent)
-                        tabs.active = tab_id
-                        return
-
-        # Create new message view - use hash of path for ID (path contains invalid chars)
-        import hashlib
+        # Widget IDs cannot contain path characters, so use a hash of the path
         safe_id = hashlib.md5(message.path.encode()).hexdigest()[:12]
         widget = MessageViewWidget(message, id=f"msg-{safe_id}")
         title = message.subject[:20] + "..." if len(message.subject) > 20 else message.subject
-        self.add_tab(title, widget)
+        self.add_tab(title, widget, replace_id=replace_tab)
 
     def open_compose(
         self,
@@ -592,26 +510,6 @@ class BorApp(App):
 
         widget = SyncWidget(self.config.sync.command)
         self.add_tab("Sync", widget)
-
-    def get_current_message(self) -> Optional[EmailMessage]:
-        """Get the currently focused message."""
-        if 0 <= self._current_index < len(self._current_messages):
-            return self._current_messages[self._current_index]
-        return None
-
-    def get_next_message(self) -> Optional[EmailMessage]:
-        """Get the next message in the list."""
-        if self._current_index + 1 < len(self._current_messages):
-            self._current_index += 1
-            return self._current_messages[self._current_index]
-        return None
-
-    def get_prev_message(self) -> Optional[EmailMessage]:
-        """Get the previous message in the list."""
-        if self._current_index > 0:
-            self._current_index -= 1
-            return self._current_messages[self._current_index]
-        return None
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:

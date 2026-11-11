@@ -33,14 +33,14 @@ Bor is a terminal-based email client built on:
 │                    MuInterface                          │
 │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────┐   │
 │  │   find()    │ │   view()    │ │    move()       │   │
-│  │   index()   │ │  contacts() │ │   delete()      │   │
+│  │   index()   │ │  contacts() │ │ queue_reindex() │   │
 │  └─────────────┘ └─────────────┘ └─────────────────┘   │
 └───────────────────────────┬─────────────────────────────┘
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────┐
 │                    mu command-line                      │
-│  mu find | mu view | mu cfind | mu extract | mu index  │
+│ mu find | cfind | extract | index | add | remove | info │
 └───────────────────────────┬─────────────────────────────┘
                             │
                             ▼
@@ -75,8 +75,9 @@ Key classes:
 
 Key methods:
 - `find()` - Search messages
-- `view()` - Get full message content (also parses any `text/calendar` part into `EmailMessage.calendar_event`)
-- `move()` - Move message between folders
+- `view()` - Get full message content by parsing the Maildir file directly with Python's `email` package (no `mu view`); also parses any `text/calendar` part into `EmailMessage.calendar_event`
+- `move()` - Move message between folders (a file move plus a queued reindex; `mu move` is not used)
+- `undo_move()` - Move the last moved message back
 - `find_contacts()` - Search contacts
 - `extract_attachment()` - Extract attachment to file
 - `queue_reindex()` - Queue a `mu remove`/`mu add` database update for the background worker
@@ -90,6 +91,12 @@ message state) and defer the mu database update to a background thread, batching
 pending paths into a single `remove` and a single `add`. Anything that queries mu
 afterwards calls `wait_for_reindex()` first, from its worker thread, so results
 reflect pending changes.
+
+Known exceptions that still call `mu` on the UI thread: reply and forward from
+the index (`view()`), `Ctrl+T` show-thread (`find_thread()`, several `mu find`
+runs), `Ctrl+R` refresh, save-draft and post-sync `mu index`, opening a forward or
+draft in compose, attachment extraction, and the `mu cfind` fallback on Tab in an
+address field.
 
 ### bor/ical.py
 
@@ -106,13 +113,19 @@ Key items:
 The message viewer (`bor/tabs/message.py`) renders this as a formatted block
 above the body via `format_calendar_event()`.
 
+### bor/editing.py
+
+Small text-editing helpers shared by the inputs: clipboard copy (via the optional
+`pyperclip`), emacs-style kill-line for `Input` and `TextArea`, and newline
+normalization.
+
 ### bor/app.py
 
 Main Textual application.
 
 Key classes:
 - `BorApp` - Main application
-- `BorTabbedContent` - Extended tabbed content with notifications
+- `BorTabbedContent` - The app's `TabbedContent` (a distinct type for querying)
 
 Key methods:
 - `add_tab()` - Add new tab
@@ -129,12 +142,15 @@ Tab widgets for different views.
 
 #### message_index.py
 - `MessageIndexWidget` - Message list with navigation and actions
-- `SearchInput` - Search input with submission handling
+- `SearchInput` - Search input with history (stored in `~/.local/share/bor/search_history`)
+- `ConfirmBar`, `FlagBar`, `ReplyBar` - One-line prompts, also used by the message view
+- `apply_flag()` - Applies a `FlagBar` choice to a message; shared with the message view
 
 #### message.py
 - `MessageViewWidget` - Single message display
 - `MessageHeader` - Header display widget
-- `MessageBody` - Body display widget
+- `UrlPickerBar` - URL chooser for `O`
+- `format_calendar_event()` - Calendar invite summary block
 
 #### compose.py
 - `ComposeWidget` - Email composition
@@ -236,13 +252,17 @@ Tabs are managed using Textual's `TabbedContent` widget:
 - **Tab 0**: Always Message Index (cannot be closed)
 - **Tabs 1-9**: Dynamic tabs for messages, compose, etc.
 
-Tab switching via Alt+0-9 is handled by detecting special Unicode characters
-that some terminals produce for Alt+digit combinations.
+Tab switching via Alt+0-9 uses priority key bindings, plus `BorApp.on_key`
+detecting the characters some terminals (e.g. macOS Option+digit) produce
+instead (`ALT_DIGIT_MAP`).
 
 ## Threading
 
-Message threading uses mu's `--threads` option which returns thread information.
-Thread level is used to indent subjects in the message list.
+Threaded searches pass mu's `--threads` option, which returns messages in thread
+order. `MuInterface._compute_thread_levels()` then derives each message's depth
+from its `References` chain (nearest visible ancestor + 1), and
+`MessageIndexWidget._compute_thread_prefixes()` draws the `├ └ │` tree in the
+subject column.
 
 ## Configuration Priority
 
@@ -253,12 +273,10 @@ Thread level is used to indent subjects in the message list.
 
 ## Styling
 
-Styles are defined inline in widget classes using Textual CSS. Key style classes:
-
-- `.unread` - Unread messages
-- `.flagged` - Important messages
-- `.marked` - Selected for action
-- `.quoted` - Quoted text in messages
+Styles are defined inline in widget classes using Textual CSS (`DEFAULT_CSS`),
+plus a little app-wide CSS in `BorApp.CSS`. Message list rows are not styled with
+CSS classes: unread and flagged rows get Rich styles built from `[colors]`, and
+marked rows show `display.flag_marked` in the flags column.
 
 ## UI responsiveness
 

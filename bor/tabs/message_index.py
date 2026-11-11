@@ -9,21 +9,25 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, List, Optional, Set
+from typing import TYPE_CHECKING, Callable, List, Optional, Set
 
+from rich.style import Style as RichStyle
+from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Vertical, Horizontal
+from textual.containers import Container, Horizontal, Vertical
 from textual.message import Message
 from textual.widget import Widget
-from textual.widgets import DataTable, Input, Static, Label
-from textual.coordinate import Coordinate
+from textual.widgets import DataTable, Input, Label, Static
 
-from bor.tabs.base import BaseTab
-from bor.mu import EmailMessage
 from bor.config import get_config
-from bor.editing import copy_to_clipboard, kill_input_line
+from bor.editing import kill_input_to_end
+from bor.mu import EmailMessage
+from bor.tabs.base import BaseTab
+
+if TYPE_CHECKING:
+    from bor.mu import MuInterface
 
 
 _HISTORY_FILE = Path.home() / ".local" / "share" / "bor" / "search_history"
@@ -49,7 +53,7 @@ class SearchInput(Input):
         try:
             if _HISTORY_FILE.exists():
                 lines = _HISTORY_FILE.read_text(encoding="utf-8").splitlines()
-                self._history = [l for l in lines if l.strip()]
+                self._history = [line for line in lines if line.strip()]
         except Exception:
             pass
 
@@ -99,10 +103,7 @@ class SearchInput(Input):
             event.stop()
 
         elif event.key == "ctrl+k":
-            new_value, new_cursor, killed_text = kill_input_line(self.value, self.cursor_position)
-            copy_to_clipboard(killed_text)
-            self.value = new_value
-            self.cursor_position = new_cursor
+            kill_input_to_end(self)
             event.prevent_default()
             event.stop()
 
@@ -336,6 +337,57 @@ class FlagBar(Static):
     can_focus = True
 
 
+def apply_flag(mu: "MuInterface", path: str, flags: List[str], flag_key: str) -> None:
+    """Apply a FlagBar choice to a message file and its in-memory flag list.
+
+    Lowercase u/n/f adds unread/new/flagged; uppercase removes it. `path` is
+    the maildir file to rename; `flags` is updated in place so the index row
+    can be redrawn without a new mu query.
+    """
+    is_remove = flag_key.isupper()
+    flag_lower = flag_key.lower()
+
+    if flag_lower == "u":
+        if is_remove:
+            # Mark as read (remove unread)
+            mu.mark_read(path)
+            if "unread" in flags:
+                flags.remove("unread")
+            if "seen" not in flags:
+                flags.append("seen")
+        else:
+            # Mark as unread
+            mu.mark_unread(path)
+            if "unread" not in flags:
+                flags.append("unread")
+            if "seen" in flags:
+                flags.remove("seen")
+    elif flag_lower == "n":
+        if is_remove:
+            # Remove new flag
+            mu.mark_read(path)
+            if "new" in flags:
+                flags.remove("new")
+        else:
+            # Mark as new
+            mu.mark_unread(path)
+            if "new" not in flags:
+                flags.append("new")
+            if "unread" not in flags:
+                flags.append("unread")
+    elif flag_lower == "f":
+        if is_remove:
+            # Remove flagged
+            mu.mark_flagged(path, False)
+            if "flagged" in flags:
+                flags.remove("flagged")
+        else:
+            # Mark as flagged/important
+            mu.mark_flagged(path, True)
+            if "flagged" not in flags:
+                flags.append("flagged")
+
+
 class MessageIndexWidget(BaseTab):
     """
     Message Index widget.
@@ -513,8 +565,6 @@ class MessageIndexWidget(BaseTab):
 
     async def _refresh_table(self) -> None:
         """Refresh the message table with current messages."""
-        from rich.text import Text
-        
         table = self.query_one(DataTable)
         table.clear()
 
@@ -637,10 +687,8 @@ class MessageIndexWidget(BaseTab):
 
         return "".join(flags)
 
-    def _flags_text(self, msg: EmailMessage, config, marked: bool, base_style: str) -> "Text":
+    def _flags_text(self, msg: EmailMessage, config, marked: bool, base_style: str) -> Text:
         """Build the flags column cell; the marked symbol is shown in red."""
-        from rich.text import Text
-
         text = Text()
         if marked:
             text.append(config.display.flag_marked, style="red")
@@ -891,8 +939,6 @@ class MessageIndexWidget(BaseTab):
 
     def _update_row_style(self, idx: int) -> None:
         """Update the styling of a single row."""
-        from rich.text import Text
-        
         if idx < 0 or idx >= len(self.messages):
             return
             
@@ -919,7 +965,6 @@ class MessageIndexWidget(BaseTab):
             style = f"bold {config.colors.unread}"
         
         # Create styled text using Rich Style for explicit color control
-        from rich.style import Style as RichStyle
         flags_text = self._flags_text(msg, config, marked=idx in self.marked_messages, base_style=style)
         if style:
             rich_style = RichStyle.parse(style)
@@ -935,10 +980,8 @@ class MessageIndexWidget(BaseTab):
         row_key = str(idx)
         # DataTable doesn't have direct row update, so we update cell by cell
         try:
-            # Get the coordinate for each cell and update
             from textual.coordinate import Coordinate
-            
-            # Get row index in the table
+
             row_idx = table.get_row_index(row_key)
             
             # Update each column by coordinate
@@ -977,13 +1020,12 @@ class MessageIndexWidget(BaseTab):
             msg = self._get_current_message()
             if msg:
                 self._confirm_action(
-                    f"Archive this message?",
+                    "Archive this message?",
                     self._do_archive
                 )
 
     def _do_archive(self) -> None:
         """Actually perform the archive operation."""
-        import asyncio
         asyncio.create_task(self._do_archive_async())
 
     async def _do_archive_async(self) -> None:
@@ -1022,7 +1064,6 @@ class MessageIndexWidget(BaseTab):
 
     def _do_apply_flag(self, flag_key: str) -> None:
         """Actually apply the selected flag."""
-        import asyncio
         asyncio.create_task(self._do_apply_flag_async(flag_key))
 
     async def _do_apply_flag_async(self, flag_key: str) -> None:
@@ -1039,52 +1080,8 @@ class MessageIndexWidget(BaseTab):
             if msg:
                 messages_to_flag.append((idx, msg))
         
-        # Check if removing (uppercase) or adding (lowercase)
-        is_remove = flag_key.isupper()
-        flag_lower = flag_key.lower()
-        
         for idx, msg in messages_to_flag:
-            if flag_lower == "u":
-                if is_remove:
-                    # Mark as read (remove unread)
-                    self.bor_app.mu.mark_read(msg.path)
-                    if "unread" in msg.flags:
-                        msg.flags.remove("unread")
-                    if "seen" not in msg.flags:
-                        msg.flags.append("seen")
-                else:
-                    # Mark as unread
-                    self.bor_app.mu.mark_unread(msg.path)
-                    if "unread" not in msg.flags:
-                        msg.flags.append("unread")
-                    if "seen" in msg.flags:
-                        msg.flags.remove("seen")
-            elif flag_lower == "n":
-                if is_remove:
-                    # Remove new flag
-                    self.bor_app.mu.mark_read(msg.path)
-                    if "new" in msg.flags:
-                        msg.flags.remove("new")
-                else:
-                    # Mark as new
-                    self.bor_app.mu.mark_unread(msg.path)
-                    if "new" not in msg.flags:
-                        msg.flags.append("new")
-                    if "unread" not in msg.flags:
-                        msg.flags.append("unread")
-            elif flag_lower == "f":
-                if is_remove:
-                    # Remove flagged
-                    self.bor_app.mu.mark_flagged(msg.path, False)
-                    if "flagged" in msg.flags:
-                        msg.flags.remove("flagged")
-                else:
-                    # Mark as flagged/important
-                    self.bor_app.mu.mark_flagged(msg.path, True)
-                    if "flagged" not in msg.flags:
-                        msg.flags.append("flagged")
-            
-            # Update the row display
+            apply_flag(self.bor_app.mu, msg.path, msg.flags, flag_key)
             self._update_row_style(idx)
         
         # Clear marked messages after applying flags
@@ -1126,13 +1123,12 @@ class MessageIndexWidget(BaseTab):
             msg = self._get_current_message()
             if msg:
                 self._confirm_action(
-                    f"Delete this message?",
+                    "Delete this message?",
                     self._do_delete
                 )
 
     def _do_delete(self) -> None:
         """Actually perform the delete operation."""
-        import asyncio
         asyncio.create_task(self._do_delete_async())
 
     async def _do_delete_async(self) -> None:

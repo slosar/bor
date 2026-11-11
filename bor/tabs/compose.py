@@ -9,28 +9,31 @@ from __future__ import annotations
 import asyncio
 import email.utils
 import os
-import re
+import shutil
 import smtplib
 import tempfile
-import shutil
 from datetime import datetime
+from email import encoders
 from email.header import Header
-from email.message import EmailMessage as StdEmailMessage
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email import encoders
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set
 
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Vertical, Horizontal
-from textual.widgets import Input, TextArea, Static, Label, ListView, ListItem
-from textual.widgets.text_area import Edit, EditResult, Selection
-from textual.reactive import reactive
+from textual.containers import Container, Horizontal, Vertical
 from textual.message import Message
+from textual.reactive import reactive
+from textual.widgets import Input, Label, ListItem, ListView, Static, TextArea
+from textual.widgets.text_area import Edit, EditResult, Selection
+
+from bor.config import get_config, load_mailrc_aliases
+from bor.editing import copy_to_clipboard, kill_input_to_end, kill_text_line, normalize_newlines
+from bor.mu import EmailAddress, EmailMessage
+from bor.tabs.base import BaseTab
 
 try:
     import pyperclip
@@ -40,6 +43,7 @@ except ImportError:
 
 
 def _clip_copy(text: str) -> None:
+    """Copy text verbatim (even an empty string) to the clipboard, ignoring failures."""
     if not HAS_PYPERCLIP:
         return
     try:
@@ -49,17 +53,13 @@ def _clip_copy(text: str) -> None:
 
 
 def _clip_paste() -> str:
+    """Return clipboard text with LF line endings, or "" if unavailable."""
     if not HAS_PYPERCLIP:
         return ""
     try:
         return normalize_newlines(pyperclip.paste() or "")
     except Exception:
         return ""
-
-from bor.tabs.base import BaseTab
-from bor.mu import EmailMessage, EmailAddress
-from bor.config import get_config, load_mailrc_aliases
-from bor.editing import copy_to_clipboard, kill_input_line, kill_text_line, normalize_newlines
 
 
 # Custom messages for Ctrl+L commands
@@ -110,10 +110,25 @@ class AttachFilesFromDirectory(ComposeCommand):
     pass
 
 
+# Second key after Ctrl+L -> command posted to the ComposeWidget
+_CTRL_L_COMMANDS: Dict[str, type[ComposeCommand]] = {
+    "l": SendMessage,
+    "d": SaveDraft,
+    "x": CancelCompose,
+    "t": FocusTo,
+    "c": FocusCC,
+    "b": FocusBCC,
+    "s": FocusSubject,
+    "e": FocusEditor,
+    "a": AttachFile,
+    "z": AttachFilesFromDirectory,
+}
+
+
 class CtrlLMixin:
     """
     Mixin for handling Ctrl+L command sequences.
-    
+
     Handles Ctrl+L followed by:
     - L: Send message
     - D: Save draft
@@ -126,16 +141,16 @@ class CtrlLMixin:
     - A: Attach file
     - Z: Attach many files from a directory
     """
-    
+
     _ctrl_l_pressed: bool = False
-    
+
     def handle_ctrl_l_key(self, event: events.Key) -> bool:
         """
         Handle key events for Ctrl+L sequences.
-        
+
         Args:
             event: Key event
-            
+
         Returns:
             True if event was handled, False otherwise
         """
@@ -143,60 +158,14 @@ class CtrlLMixin:
         if self._ctrl_l_pressed:
             self._ctrl_l_pressed = False
             key = event.key.lower() if event.key else ""
-            
-            if key == "l":
-                self.post_message(SendMessage())
+            command = _CTRL_L_COMMANDS.get(key)
+            if command is not None:
+                self.post_message(command())
                 event.prevent_default()
                 event.stop()
-                return True
-            elif key == "d":
-                self.post_message(SaveDraft())
-                event.prevent_default()
-                event.stop()
-                return True
-            elif key == "x":
-                self.post_message(CancelCompose())
-                event.prevent_default()
-                event.stop()
-                return True
-            elif key == "t":
-                self.post_message(FocusTo())
-                event.prevent_default()
-                event.stop()
-                return True
-            elif key == "c":
-                self.post_message(FocusCC())
-                event.prevent_default()
-                event.stop()
-                return True
-            elif key == "b":
-                self.post_message(FocusBCC())
-                event.prevent_default()
-                event.stop()
-                return True
-            elif key == "s":
-                self.post_message(FocusSubject())
-                event.prevent_default()
-                event.stop()
-                return True
-            elif key == "e":
-                self.post_message(FocusEditor())
-                event.prevent_default()
-                event.stop()
-                return True
-            elif key == "a":
-                self.post_message(AttachFile())
-                event.prevent_default()
-                event.stop()
-                return True
-            elif key == "z":
-                self.post_message(AttachFilesFromDirectory())
-                event.prevent_default()
-                event.stop()
-                return True
-            # Unknown sequence - ignore
+            # An unknown second key is swallowed
             return True
-        
+
         # Check for Ctrl+L
         if event.key == "ctrl+l":
             self._ctrl_l_pressed = True
@@ -211,6 +180,29 @@ class CtrlLMixin:
             return True
         
         return False
+
+
+class InputEditingMixin:
+    """Clipboard and kill-line keys shared by the single-line compose inputs."""
+
+    def handle_editing_key(self, event: events.Key) -> bool:
+        """Handle Ctrl+C/V/X (whole-field clipboard) and Ctrl+K (kill to end)."""
+        if event.key == "ctrl+c":
+            _clip_copy(self.value)
+        elif event.key == "ctrl+v":
+            text = _clip_paste()
+            if text:
+                self.insert_text_at_cursor(text)
+        elif event.key == "ctrl+x":
+            _clip_copy(self.value)
+            self.value = ""
+        elif event.key == "ctrl+k":
+            kill_input_to_end(self)
+        else:
+            return False
+        event.prevent_default()
+        event.stop()
+        return True
 
 
 class HeaderNavigationMixin:
@@ -238,7 +230,7 @@ class HeaderNavigationMixin:
         return True
 
 
-class AddressInput(HeaderNavigationMixin, CtrlLMixin, Input):
+class AddressInput(InputEditingMixin, HeaderNavigationMixin, CtrlLMixin, Input):
     """
     Input widget for email addresses with autocompletion.
 
@@ -357,36 +349,13 @@ class AddressInput(HeaderNavigationMixin, CtrlLMixin, Input):
 
         return completions
 
+    # Textual calls _on_key for every class in the MRO, so Input's own key
+    # handling runs after this one unless the event's default is prevented.
     def _on_key(self, event: events.Key) -> None:
         """Handle key events for completion."""
-        # Handle clipboard operations
-        if event.key == "ctrl+c":
-            _clip_copy(self.value)
-            event.prevent_default()
-            event.stop()
+        if self.handle_editing_key(event):
             return
-        elif event.key == "ctrl+v":
-            text = _clip_paste()
-            if text:
-                self.insert_text_at_cursor(text)
-            event.prevent_default()
-            event.stop()
-            return
-        elif event.key == "ctrl+x":
-            _clip_copy(self.value)
-            self.value = ""
-            event.prevent_default()
-            event.stop()
-            return
-        elif event.key == "ctrl+k":
-            new_value, new_cursor, killed_text = kill_input_line(self.value, self.cursor_position)
-            copy_to_clipboard(killed_text)
-            self.value = new_value
-            self.cursor_position = new_cursor
-            event.prevent_default()
-            event.stop()
-            return
-        
+
         # Check Ctrl+L sequences first
         if self.handle_ctrl_l_key(event):
             return
@@ -432,10 +401,9 @@ class AddressInput(HeaderNavigationMixin, CtrlLMixin, Input):
             # Reset completion state on any other key
             self._completions = []
             self._completion_index = 0
-            super()._on_key(event)
 
 
-class SubjectInput(HeaderNavigationMixin, CtrlLMixin, Input):
+class SubjectInput(InputEditingMixin, HeaderNavigationMixin, CtrlLMixin, Input):
     """Input widget for subject line with Ctrl+L support."""
     
     def __init__(self, *args, **kwargs) -> None:
@@ -444,35 +412,9 @@ class SubjectInput(HeaderNavigationMixin, CtrlLMixin, Input):
         self._ctrl_l_pressed = False
     
     def _on_key(self, event: events.Key) -> None:
-        """Handle key events."""
-        # Handle clipboard operations
-        if event.key == "ctrl+c":
-            _clip_copy(self.value)
-            event.prevent_default()
-            event.stop()
+        """Handle key events; anything not handled here falls through to Input."""
+        if self.handle_editing_key(event):
             return
-        elif event.key == "ctrl+v":
-            text = _clip_paste()
-            if text:
-                self.insert_text_at_cursor(text)
-            event.prevent_default()
-            event.stop()
-            return
-        elif event.key == "ctrl+x":
-            _clip_copy(self.value)
-            self.value = ""
-            event.prevent_default()
-            event.stop()
-            return
-        elif event.key == "ctrl+k":
-            new_value, new_cursor, killed_text = kill_input_line(self.value, self.cursor_position)
-            copy_to_clipboard(killed_text)
-            self.value = new_value
-            self.cursor_position = new_cursor
-            event.prevent_default()
-            event.stop()
-            return
-        
         if self.handle_ctrl_l_key(event):
             return
         if self.handle_header_navigation_key(event):
@@ -482,8 +424,6 @@ class SubjectInput(HeaderNavigationMixin, CtrlLMixin, Input):
             self.screen.focus_next()
             event.prevent_default()
             event.stop()
-            return
-        super()._on_key(event)
 
 
 class ComposeTextArea(CtrlLMixin, TextArea):
@@ -769,8 +709,7 @@ class ComposeTextArea(CtrlLMixin, TextArea):
                         event.prevent_default()
                         event.stop()
                         return
-
-        super()._on_key(event)
+        # Anything not handled here falls through to TextArea's own _on_key.
 
 
 class FilePathInput(Input):
@@ -853,10 +792,7 @@ class FilePathInput(Input):
     def on_key(self, event: events.Key) -> None:
         """Handle key events for completion."""
         if event.key == "ctrl+k":
-            new_value, new_cursor, killed_text = kill_input_line(self.value, self.cursor_position)
-            copy_to_clipboard(killed_text)
-            self.value = new_value
-            self.cursor_position = new_cursor
+            kill_input_to_end(self)
             event.prevent_default()
             event.stop()
         elif event.key == "tab":
@@ -1156,8 +1092,6 @@ class ComposeWidget(BaseTab):
 
     def compose(self) -> ComposeResult:
         """Create the widget layout."""
-        config = get_config()
-
         with Vertical():
             with Container(classes="header-container"):
                 with Horizontal(classes="compose-header-row"):
@@ -1396,7 +1330,7 @@ class ComposeWidget(BaseTab):
         date_str = msg.date.strftime("%Y-%m-%d %H:%M") if msg.date else ""
         to_list = ", ".join(str(addr) for addr in msg.to_addrs)
 
-        header = f"\n\n---------- Forwarded message ----------\n"
+        header = "\n\n---------- Forwarded message ----------\n"
         header += f"From: {msg.from_addr}\n"
         header += f"Date: {date_str}\n"
         header += f"Subject: {msg.subject}\n"
@@ -1548,7 +1482,6 @@ class ComposeWidget(BaseTab):
 
     def _refresh_index_after_draft_change(self) -> None:
         """Refresh the message index after draft changes."""
-        import asyncio
         from bor.tabs.message_index import MessageIndexWidget
         try:
             index_widget = self.bor_app.query_one(MessageIndexWidget)
@@ -1797,8 +1730,6 @@ class ComposeWidget(BaseTab):
         Returns:
             True if successful
         """
-        config = get_config()
-
         if msg is None:
             msg = self._build_message()
 

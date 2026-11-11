@@ -7,16 +7,15 @@ Runs an external synchronization command and displays output.
 from __future__ import annotations
 
 import asyncio
-import subprocess
 import shlex
 from typing import Optional
 
-from textual import events, work
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Vertical, ScrollableContainer
-from textual.widgets import Static, Label, Log
+from textual.containers import Container, Vertical
 from textual.reactive import reactive
+from textual.widgets import Label, Log
 
 from bor.tabs.base import BaseTab
 

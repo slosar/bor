@@ -34,16 +34,12 @@ class BaseTab(Widget):
 
     def close_tab(self) -> None:
         """Close this tab."""
-        # Find our tab pane
-        parent = self.parent
-        while parent is not None:
-            if hasattr(parent, "id") and parent.id and parent.id.startswith("tab-"):
-                self.bor_app.close_tab(parent.id)
-                return
-            parent = parent.parent
+        tab_id = self.get_tab_id()
+        if tab_id:
+            self.bor_app.close_tab(tab_id)
 
     def get_tab_id(self) -> str:
-        """Get the ID of this tab."""
+        """Get the ID of the TabPane containing this widget, or "" if none."""
         parent = self.parent
         while parent is not None:
             if hasattr(parent, "id") and parent.id and parent.id.startswith("tab-"):

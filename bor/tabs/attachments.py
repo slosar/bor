@@ -352,15 +352,7 @@ class AttachmentsWidget(BaseTab):
 
     BINDINGS = [
         # Selection
-        Binding("1", "select_1", "Select 1", show=False),
-        Binding("2", "select_2", "Select 2", show=False),
-        Binding("3", "select_3", "Select 3", show=False),
-        Binding("4", "select_4", "Select 4", show=False),
-        Binding("5", "select_5", "Select 5", show=False),
-        Binding("6", "select_6", "Select 6", show=False),
-        Binding("7", "select_7", "Select 7", show=False),
-        Binding("8", "select_8", "Select 8", show=False),
-        Binding("9", "select_9", "Select 9", show=False),
+        *[Binding(str(n), f"select({n})", f"Select {n}", show=False) for n in range(1, 10)],
 
         # Navigation
         Binding("up", "cursor_up", "Up", show=False),
@@ -546,20 +538,6 @@ class AttachmentsWidget(BaseTab):
         """Check if we're running in kitty terminal."""
         return _supports_kitty_graphics()
 
-    def _open_with_kitty_icat(self, index: int) -> None:
-        """
-        Open an image attachment with kitty icat.
-
-        Args:
-            index: Attachment index (0-based)
-        """
-        file_path = self._extract_attachment(index)
-        if file_path:
-            try:
-                subprocess.run(["kitty", "+kitten", "icat", str(file_path)])
-            except Exception:
-                pass
-
     def _open_with_system(self, index: int) -> None:
         """
         Open an attachment with the system's default handler.
@@ -619,50 +597,14 @@ class AttachmentsWidget(BaseTab):
 
     # Actions
 
-    def _select_attachment(self, index: int) -> None:
-        """Select an attachment by index (1-based for user display)."""
-        idx = index - 1  # Convert to 0-based
+    def action_select(self, number: int) -> None:
+        """Select an attachment by its displayed (1-based) number."""
+        idx = number - 1
         if 0 <= idx < len(self.attachments):
             self._selected_index = idx
             list_view = self.query_one("#attachment-list", ListView)
             list_view.index = idx
             self._preview_attachment(idx)
-
-    def action_select_1(self) -> None:
-        """Select attachment 1."""
-        self._select_attachment(1)
-
-    def action_select_2(self) -> None:
-        """Select attachment 2."""
-        self._select_attachment(2)
-
-    def action_select_3(self) -> None:
-        """Select attachment 3."""
-        self._select_attachment(3)
-
-    def action_select_4(self) -> None:
-        """Select attachment 4."""
-        self._select_attachment(4)
-
-    def action_select_5(self) -> None:
-        """Select attachment 5."""
-        self._select_attachment(5)
-
-    def action_select_6(self) -> None:
-        """Select attachment 6."""
-        self._select_attachment(6)
-
-    def action_select_7(self) -> None:
-        """Select attachment 7."""
-        self._select_attachment(7)
-
-    def action_select_8(self) -> None:
-        """Select attachment 8."""
-        self._select_attachment(8)
-
-    def action_select_9(self) -> None:
-        """Select attachment 9."""
-        self._select_attachment(9)
 
     def action_cursor_up(self) -> None:
         """Move cursor up."""

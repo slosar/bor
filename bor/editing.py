@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
+from typing import Any
 
 try:
     import pyperclip
@@ -31,6 +30,17 @@ def kill_input_line(value: str, cursor_position: int) -> tuple[str, int, str]:
     cursor_position = max(0, min(cursor_position, len(value)))
     killed_text = value[cursor_position:]
     return value[:cursor_position], cursor_position, killed_text
+
+
+def kill_input_to_end(widget: Any) -> None:
+    """Emacs-style Ctrl+K for a single-line Input: cut to the end of the line.
+
+    `widget` is anything with Input's `value` and `cursor_position`.
+    """
+    new_value, new_cursor, killed_text = kill_input_line(widget.value, widget.cursor_position)
+    copy_to_clipboard(killed_text)
+    widget.value = new_value
+    widget.cursor_position = new_cursor
 
 
 def normalize_newlines(text: str) -> str:

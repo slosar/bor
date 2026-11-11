@@ -12,24 +12,22 @@ import html
 import re
 import tempfile
 import webbrowser
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Callable, Optional, Union
 
 from rich.text import Text
-
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Vertical, ScrollableContainer
-from textual.widgets import Static, Label, Markdown
+from textual.containers import ScrollableContainer
 from textual.reactive import reactive
+from textual.widgets import Static
 
-from bor.tabs.base import BaseTab
-from bor.ical import CalendarEvent
-from bor.mu import EmailMessage, MuInterface
 from bor.config import get_config
-
+from bor.ical import CalendarEvent
+from bor.mu import EmailMessage
+from bor.tabs.base import BaseTab
 
 _URL_RE = re.compile(r'(https?://\S+)')
 
@@ -158,7 +156,6 @@ def _cal_when_lines(ev: CalendarEvent) -> list[str]:
         # All-day DTEND is exclusive; subtract a day so a 1-day event reads as
         # a single date rather than spanning into the next morning.
         if end is not None and (end - start).days > 1:
-            from datetime import timedelta
             last = end - timedelta(days=1)
             return [f"{_cal_day(start)}  →  {_cal_day(last)}  (all day)"]
         return [f"{_cal_day(start)}  (all day)"]
@@ -383,39 +380,6 @@ class MessageHeader(Static):
                 add_row(f"{hdr_name}: ", display_val)
 
         return text
-
-
-class MessageBody(ScrollableContainer):
-    """Widget to display message body."""
-
-    can_focus = True
-
-    DEFAULT_CSS = """
-    MessageBody {
-        height: 1fr;
-        padding: 1;
-    }
-
-    MessageBody .quoted {
-        color: $text-muted;
-        text-style: italic;
-    }
-    """
-
-    def __init__(self, content: str, **kwargs) -> None:
-        """
-        Initialize message body display.
-
-        Args:
-            content: Message body text
-        """
-        super().__init__(**kwargs)
-        self.content = content
-
-    def compose(self) -> ComposeResult:
-        """Create the body layout."""
-        # Try to use Markdown for rich display
-        yield Static(self.content)
 
 
 class UrlPickerBar(Static):
@@ -771,8 +735,9 @@ class MessageViewWidget(BaseTab):
     def _refresh_index_row(self) -> None:
         """Refresh all read messages' rows in the index to show updated read status."""
         try:
-            from bor.tabs.message_index import MessageIndexWidget
             from textual.widgets import DataTable
+
+            from bor.tabs.message_index import MessageIndexWidget
             index_widget = self.bor_app.query_one(MessageIndexWidget)
             # Refresh all messages that were read during this viewing session
             for idx in self._read_message_indices:
@@ -785,55 +750,39 @@ class MessageViewWidget(BaseTab):
         except Exception:
             pass
 
+    def _position_in_index(self) -> Optional[int]:
+        """Find the displayed message's position in the index list, by msgid."""
+        current_msgid = self._message_ref.msgid.strip().strip("<>")
+        for idx, msg in enumerate(self.bor_app._current_messages):
+            if msg.msgid.strip().strip("<>") == current_msgid:
+                return idx
+        return None
+
+    def _show_index_message(self, idx: int) -> None:
+        """Load the index message at `idx` into this view."""
+        self.bor_app._current_index = idx
+        self._message_ref = self.bor_app._current_messages[idx]
+        self._load_message()
+
     def action_next_message(self) -> None:
         """View the next message in index order.
-        
+
         Only navigates if the current message exists in the index.
         Navigation follows the index order (threaded or date-sorted).
         """
-        # Find current message's position in the index by msgid
-        current_msgid = self._message_ref.msgid.strip().strip("<>")
-        current_idx = None
-        for idx, msg in enumerate(self.bor_app._current_messages):
-            if msg.msgid.strip().strip("<>") == current_msgid:
-                current_idx = idx
-                break
-
-        # If current message is not in index, do nothing
-        if current_idx is None:
-            return
-
-        # Check if there's a next message
-        if current_idx + 1 < len(self.bor_app._current_messages):
-            self.bor_app._current_index = current_idx + 1
-            next_msg = self.bor_app._current_messages[current_idx + 1]
-            self._message_ref = next_msg
-            self._load_message()
+        current_idx = self._position_in_index()
+        if current_idx is not None and current_idx + 1 < len(self.bor_app._current_messages):
+            self._show_index_message(current_idx + 1)
 
     def action_prev_message(self) -> None:
         """View the previous message in index order.
-        
+
         Only navigates if the current message exists in the index.
         Navigation follows the index order (threaded or date-sorted).
         """
-        # Find current message's position in the index by msgid
-        current_msgid = self._message_ref.msgid.strip().strip("<>")
-        current_idx = None
-        for idx, msg in enumerate(self.bor_app._current_messages):
-            if msg.msgid.strip().strip("<>") == current_msgid:
-                current_idx = idx
-                break
-
-        # If current message is not in index, do nothing
-        if current_idx is None:
-            return
-
-        # Check if there's a previous message
-        if current_idx > 0:
-            self.bor_app._current_index = current_idx - 1
-            prev_msg = self.bor_app._current_messages[current_idx - 1]
-            self._message_ref = prev_msg
-            self._load_message()
+        current_idx = self._position_in_index()
+        if current_idx is not None and current_idx > 0:
+            self._show_index_message(current_idx - 1)
 
     def action_reply(self) -> None:
         """Reply to this message."""
@@ -892,56 +841,14 @@ class MessageViewWidget(BaseTab):
         """Actually apply the selected flag to current message. Uppercase = remove."""
         if not self._full_message:
             return
-        
-        msg = self._message_ref
+
+        from bor.tabs.message_index import MessageIndexWidget, apply_flag
+
         current_idx = self.bor_app._current_index
-        
-        # Check if removing (uppercase) or adding (lowercase)
-        is_remove = flag_key.isupper()
-        flag_lower = flag_key.lower()
-        
-        if flag_lower == "u":
-            if is_remove:
-                # Mark as read (remove unread)
-                self.bor_app.mu.mark_read(self._full_message.path)
-                if "unread" in msg.flags:
-                    msg.flags.remove("unread")
-                if "seen" not in msg.flags:
-                    msg.flags.append("seen")
-            else:
-                # Mark as unread
-                self.bor_app.mu.mark_unread(self._full_message.path)
-                if "unread" not in msg.flags:
-                    msg.flags.append("unread")
-                if "seen" in msg.flags:
-                    msg.flags.remove("seen")
-        elif flag_lower == "n":
-            if is_remove:
-                # Remove new flag
-                self.bor_app.mu.mark_read(self._full_message.path)
-                if "new" in msg.flags:
-                    msg.flags.remove("new")
-            else:
-                # Mark as new
-                self.bor_app.mu.mark_unread(self._full_message.path)
-                if "new" not in msg.flags:
-                    msg.flags.append("new")
-                if "unread" not in msg.flags:
-                    msg.flags.append("unread")
-        elif flag_lower == "f":
-            if is_remove:
-                # Remove flagged
-                self.bor_app.mu.mark_flagged(self._full_message.path, False)
-                if "flagged" in msg.flags:
-                    msg.flags.remove("flagged")
-            else:
-                # Mark as flagged/important
-                self.bor_app.mu.mark_flagged(self._full_message.path, True)
-                if "flagged" not in msg.flags:
-                    msg.flags.append("flagged")
-        
+        # Rename the loaded file, but update the index row's flag list.
+        apply_flag(self.bor_app.mu, self._full_message.path, self._message_ref.flags, flag_key)
+
         # Update the row in index
-        from bor.tabs.message_index import MessageIndexWidget
         try:
             index_widget = self.bor_app.query_one(MessageIndexWidget)
             index_widget._update_row_style(current_idx)
@@ -962,24 +869,23 @@ class MessageViewWidget(BaseTab):
     def _do_archive(self) -> None:
         """Actually archive the message."""
         if self._full_message:
-            config = get_config()
-            current_idx = self.bor_app._current_index
-            self.bor_app.mu.move(self._full_message.path, config.folders.archive)
-            
-            # Refresh the index to remove archived message
-            self._refresh_index_after_move(current_idx)
-            
-            # Move to next message or close
-            if self.bor_app._current_index < len(self.bor_app._current_messages):
-                next_msg = self.bor_app._current_messages[self.bor_app._current_index]
-                self._message_ref = next_msg
-                self._load_message()
-            else:
-                self.close_tab()
+            self._move_and_advance(get_config().folders.archive)
 
-    def _refresh_index_after_move(self, removed_idx: int) -> None:
+    def _move_and_advance(self, folder: str) -> None:
+        """Move the displayed message to `folder`, then show the next one or close."""
+        self.bor_app.mu.move(self._full_message.path, folder)
+
+        # Refresh the index to remove the moved message
+        self._refresh_index_after_move()
+
+        # Move to next message or close
+        if self.bor_app._current_index < len(self.bor_app._current_messages):
+            self._show_index_message(self.bor_app._current_index)
+        else:
+            self.close_tab()
+
+    def _refresh_index_after_move(self) -> None:
         """Refresh the index after a message was moved/deleted."""
-        import asyncio
         from bor.tabs.message_index import MessageIndexWidget
         try:
             index_widget = self.bor_app.query_one(MessageIndexWidget)
@@ -994,22 +900,9 @@ class MessageViewWidget(BaseTab):
             self._confirm_action("Delete this message?", self._do_delete)
 
     def _do_delete(self) -> None:
-        """Actually delete the message."""
+        """Actually delete the message (move it to the trash folder)."""
         if self._full_message:
-            config = get_config()
-            current_idx = self.bor_app._current_index
-            self.bor_app.mu.move(self._full_message.path, config.folders.trash)
-            
-            # Refresh the index to remove deleted message
-            self._refresh_index_after_move(current_idx)
-            
-            # Move to next message or close
-            if self.bor_app._current_index < len(self.bor_app._current_messages):
-                next_msg = self.bor_app._current_messages[self.bor_app._current_index]
-                self._message_ref = next_msg
-                self._load_message()
-            else:
-                self.close_tab()
+            self._move_and_advance(get_config().folders.trash)
 
     def action_attachments(self) -> None:
         """View attachments."""

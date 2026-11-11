@@ -1,17 +1,15 @@
 # Example Bor Configuration File
-# Copy to ~/.config/bor.conf and customize
+# Copy to ~/.config/bor.conf and customize.
+# Unknown sections are ignored, but a misspelled option inside a section makes
+# the whole file fail to load (Bor then warns and uses the defaults).
 
 [general]
 # Maximum number of messages to display in message list
 max_messages = 400
 
-# Date format for message list (strftime format)
+# Message list dates (strftime): older than this year / this year / today
 date_format = "%Y-%m-%d %H:%M"
-
-# Short date format for compact view
 short_date_format = "%m/%d"
-
-# Time format for today's messages
 time_format = "%H:%M"
 
 # Textual UI theme (e.g. textual-dark, textual-light, nord, gruvbox, dracula)
@@ -30,8 +28,10 @@ trash = "/Trash"
 server = "smtp.example.com"
 port = 587
 username = "user@example.com"
-# Password can be omitted - will prompt or use system keyring
+# Password can be omitted if stored in the system keyring
+# (service "bor-email", user = username); there is no interactive prompt.
 # password = "your-password"
+# use_starttls (port 587) takes precedence; use_tls alone means SMTPS (port 465)
 use_tls = true
 use_starttls = true
 
@@ -39,7 +39,7 @@ use_starttls = true
 # Default identity
 name = "Your Name"
 email = "user@example.com"
-# Optional organization
+# Optional organization (currently unused)
 organization = ""
 # Signature (use triple quotes for multiline)
 signature = """
@@ -48,30 +48,27 @@ Your Name
 """
 
 [colors]
-# Colors for message display
+# Message list colors (Rich styles)
 # Valid color names: blue, green, red, yellow, magenta, cyan, dark_orange, orange1, etc.
 # You can also use hex colors like "#ff8c00"
 unread = "blue"
+# flagged messages
 important = "dark_orange"
-header = "bold"
-quoted = "italic dim"
+# header, quoted and marked are accepted but currently have no effect
 
 [sync]
-# External synchronization command
+# External synchronization command. It is run directly, not through a shell,
+# so use sh -c '...' for && or pipes. Bor runs `mu index` itself afterwards.
 command = "mbsync -a"
 # Alternative examples:
 # command = "offlineimap"
-# command = "fetchmail && mu index"
+# command = "sh -c 'mbsync work && mbsync personal'"
 
 [threading]
 # Enable threading by default
 enabled = true
-# Thread indicator character
+# Thread indicator character (currently unused; threads are drawn as a tree)
 indicator = "↳"
-
-[keybindings]
-# Custom keybindings can be added here
-# Format: action = "key"
 
 [aliases]
 # Tab autocompletions in compose mode
@@ -83,20 +80,16 @@ k = "Kind regards,"
 
 [email_aliases]
 # Email address aliases for quick addressing
-# Works like .mailrc aliases
+# Works like .mailrc aliases (~/.mailrc aliases are merged in)
 # Example:
 # john = "john.doe@example.com"
 # team = "alice@example.com, bob@example.com"
 
 [display]
-# Message list columns
-# Available: date, from, to, subject, flags, size, maildir
-columns = ["date", "from", "subject", "flags"]
-
-# Column widths (0 = auto/fill remaining space)
+# Column widths; the layout is fixed (flags, date, from, subject) and the
+# subject fills the remaining width
 date_width = 12
 from_width = 20
-subject_width = 0
 flags_width = 6
 
 # Flags symbols
@@ -106,26 +99,18 @@ flag_forwarded = "→"
 flag_flagged = "⚑"
 flag_attachment = "📎"
 flag_marked = "𝐌"
-flag_encrypted = "🔒"
-flag_signed = "✓"
 
 [html]
-# HTML rendering for HTML-only emails
-# Options: html2text, rich, links, w3m
-renderer = "html2text"
-# Open links in browser
-open_links_in_browser = true
+# HTML-only emails are converted with html2text when installed.
+# Directory for the temporary file used by "view in browser" (V)
+# browser_tmp_dir = "~/tmp/bor"
 
 [attachments]
 # Default directory for saving attachments
 save_directory = "~/Downloads"
-# Use kitty icat for image preview (if available)
+# Preview images inline with the kitty graphics protocol (if available)
 use_kitty_icat = true
 # Force kitty graphics support even when TERM is not xterm-kitty
 force_kitty_support = false
 
-[editor]
-# External editor for compose (optional)
-# Leave empty to use built-in editor
-external = ""
-# Example: external = "vim"
+# [editor] external = "..." is accepted but not implemented yet.

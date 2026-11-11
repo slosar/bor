@@ -23,7 +23,7 @@ Complete reference of all keyboard shortcuts in Bor email reader.
 
 | Key | Action |
 |-----|--------|
-| Ctrl+Q | Quit application |
+| Ctrl+Q | Quit application (ignored while a compose tab is active) |
 
 ## Message Index
 
@@ -46,7 +46,7 @@ Complete reference of all keyboard shortcuts in Bor email reader.
 | R | Reply to message |
 | F | Forward message |
 | C | Compose new message |
-| E | Edit draft (if in Drafts folder; removes draft from Drafts immediately) |
+| E | Edit draft (only in the Drafts folder; the original draft is moved to Trash as soon as the editor opens) |
 | M | Mark/unmark message |
 | X | Archive message(s) (with y/n confirmation) |
 | A | Apply flag (U/N/F to add, Shift+U/N/F to remove) |
@@ -61,6 +61,15 @@ Complete reference of all keyboard shortcuts in Bor email reader.
 | I | Show Inbox |
 | O | Show Archive |
 | U | Show Drafts |
+
+In the search prompt:
+
+| Key | Action |
+|-----|--------|
+| Enter | Run the query (and add it to the search history) |
+| ↑ / ↓ | Browse previous queries |
+| Ctrl+K | Delete to end of line (copied to clipboard) |
+| Esc | Close the prompt |
 
 ### View Options
 
@@ -156,11 +165,16 @@ The URL picker shows and opens the first 9 URLs. If a message has more than 9 UR
 
 | Key | Action |
 |-----|--------|
-| Ctrl+C | Copy |
-| Ctrl+X | Cut |
+| Ctrl+C | Copy (body: selection; header fields: the whole field) |
+| Ctrl+X | Cut (body: selection; header fields: the whole field) |
 | Ctrl+V | Paste |
-| Ctrl+Z | Undo |
-| Ctrl+Y | Redo |
+| Ctrl+K | Delete to end of line, copying it to the clipboard (repeated presses in the body append) |
+| Ctrl+U | Delete to start of line |
+| Ctrl+W | Delete previous word |
+| Ctrl+Backspace | Delete previous word (body only) |
+| Ctrl+T | Transpose characters around the cursor (body) |
+| Ctrl+Z | Undo (body) |
+| Ctrl+Y | Redo (body) |
 
 ### Commands
 
@@ -168,11 +182,21 @@ The URL picker shows and opens the first 9 URLs. If a message has more than 9 UR
 |-----|--------|
 | Ctrl+L L | Send message |
 | Ctrl+L D | Save as draft |
-| Ctrl+L X | Cancel (with confirmation) |
+| Ctrl+L X | Cancel — closes the tab immediately, without confirmation; unsent text is discarded |
 | Ctrl+L T/C/B/S/E | Jump to To/CC/BCC/Subject/Editor field |
 | Ctrl+L A | Attach file (with path completion) |
-| Ctrl+I | Insert file contents |
-| Ctrl+S | Search in index |
+| Ctrl+L Z | Attach several files from a directory (opens a picker) |
+| Ctrl+I | Insert file contents (only in terminals that report Ctrl+I separately from Tab, e.g. kitty; elsewhere it acts as Tab) |
+| Ctrl+S | Switch to the message index (does not open the search prompt) |
+
+In the bulk-attachment picker (`Ctrl+L Z`):
+
+| Key | Action |
+|-----|--------|
+| Space | Toggle the highlighted file |
+| Ctrl+A | Toggle all files |
+| Enter | Attach the selected files |
+| Esc | Cancel |
 
 ### Autocompletion
 
@@ -182,8 +206,10 @@ In To/CC/BCC fields:
 
 In body:
 - Type alias letter, press Tab to expand (configurable in [aliases])
+- Tab with no alias before the cursor moves focus out of the editor (to the tab bar)
 
 In attachment path input:
+- Ctrl+K deletes to end of line; Esc cancels
 - Press Tab to complete file/folder names
 - Matching is case-insensitive; with multiple matches the input extends to the longest shared prefix (keeping the actual file casing) and the matches are listed
 - Starts from home directory, remembers last used folder
@@ -194,8 +220,11 @@ In attachment path input:
 |-----|--------|
 | R | Re-run sync command |
 | Ctrl+C | Cancel running command |
-| Q | Close tab and return to index |
-| < | Return to index (keep tab open) |
+| X | Close tab (cancels a running command) and return to index |
+| M | Return to index (keep tab open) |
+
+After a successful sync Bor runs `mu index`, refreshes the message index, and
+closes the Sync tab automatically. On failure the tab stays open with the output.
 
 ## Tips
 
@@ -211,6 +240,5 @@ In attachment path input:
 
 ### Quick Search
 - Press I/O/U for quick access to Inbox/Archive/Drafts
-- Use Ctrl+F for incremental search in the index
-- Use S for complex mu queries
+- Use S for mu queries; ↑/↓ in the prompt recalls earlier ones
 - Use Ctrl+T to see full thread context

@@ -8,19 +8,69 @@ Handles searching, viewing, moving, and managing email messages.
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import subprocess
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from email import policy, utils as email_utils
+from email import policy
+from email import utils as email_utils
 from email.parser import BytesParser
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from bor.ical import CalendarEvent, parse_calendar
+
+# mu numbers MIME parts depth-first starting at 1, skipping structural multipart
+# containers (mixed, alternative, related, ...) except these, which it lists as
+# extractable parts.
+_COUNTED_MULTIPART = {"multipart/signed", "multipart/encrypted"}
+
+# Headers captured for the full-header view (Ctrl+R in the message view).
+_EXTRA_HEADER_NAMES = [
+    "Return-Path",
+    "Sender",
+    "X-Mailer",
+    "User-Agent",
+    "X-Spam-Status",
+    "X-Spam-Score",
+    "Authentication-Results",
+    "X-Originating-IP",
+]
+
+
+def _timestamp_to_datetime(timestamp: float, tz: Optional[timezone]) -> Optional[datetime]:
+    """Convert a Unix timestamp to a datetime, or None if it is out of range."""
+    try:
+        return datetime.fromtimestamp(timestamp, tz=tz)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _decode_part_text(part: Any) -> Optional[str]:
+    """Decode a MIME part's payload using its declared charset.
+
+    Falls back to UTF-8 for unknown charsets. Returns None when the part has
+    no byte payload.
+    """
+    payload = part.get_payload(decode=True)
+    if not payload or not isinstance(payload, bytes):
+        return None
+    charset = part.get_content_charset() or "utf-8"
+    try:
+        return payload.decode(charset, errors="replace")
+    except LookupError:
+        return payload.decode("utf-8", errors="replace")
+
+
+def _parse_address_header(value: str) -> List["EmailAddress"]:
+    """Parse an address-list header; getaddresses handles quoted names with commas."""
+    return [
+        EmailAddress(name=name, email=email)
+        for name, email in email_utils.getaddresses([value])
+        if email
+    ]
 
 
 @dataclass
@@ -187,25 +237,15 @@ class EmailMessage:
                 date_tz = timezone(timedelta(seconds=utc_offset))
 
         if isinstance(unix_date, (int, float)) and not isinstance(unix_date, bool):
-            try:
-                msg.date = datetime.fromtimestamp(unix_date, tz=date_tz)
-            except (OverflowError, OSError, ValueError):
-                msg.date = None
+            msg.date = _timestamp_to_datetime(unix_date, date_tz)
         elif date_val:
             if isinstance(date_val, list) and len(date_val) >= 2:
                 # Legacy mu JSON time: [high, low, usec], with
                 # timestamp = high * 65536 + low.
                 high, low = date_val[0], date_val[1]
-                timestamp = high * 65536 + low
-                try:
-                    msg.date = datetime.fromtimestamp(timestamp, tz=date_tz)
-                except (OverflowError, OSError, ValueError):
-                    msg.date = None
+                msg.date = _timestamp_to_datetime(high * 65536 + low, date_tz)
             elif isinstance(date_val, (int, float)):
-                try:
-                    msg.date = datetime.fromtimestamp(date_val, tz=date_tz)
-                except (OverflowError, OSError, ValueError):
-                    msg.date = None
+                msg.date = _timestamp_to_datetime(date_val, date_tz)
             elif isinstance(date_val, str):
                 try:
                     msg.date = datetime.fromisoformat(date_val)
@@ -214,13 +254,10 @@ class EmailMessage:
                 except ValueError:
                     msg.date = None
 
-        # Parse addresses
+        # Parse addresses (from_mu takes the first entry of a list)
         from_data = get("from")
         if from_data:
-            if isinstance(from_data, list) and len(from_data) > 0:
-                msg.from_addr = EmailAddress.from_mu(from_data[0])
-            else:
-                msg.from_addr = EmailAddress.from_mu(from_data)
+            msg.from_addr = EmailAddress.from_mu(from_data)
 
         to_data = get("to", [])
         if isinstance(to_data, list):
@@ -258,22 +295,14 @@ class EmailMessage:
         # Parse Reply-To header (mu may return list, dict, or string)
         reply_to_data = get("reply-to", None)
         if reply_to_data:
-            if isinstance(reply_to_data, list) and reply_to_data:
-                msg.reply_to_addr = EmailAddress.from_mu(reply_to_data[0])
-            elif not isinstance(reply_to_data, list):
-                msg.reply_to_addr = EmailAddress.from_mu(reply_to_data)
+            msg.reply_to_addr = EmailAddress.from_mu(reply_to_data)
 
         # Parse List-Post header (mailing list address, takes priority over Reply-To for replies)
         list_post_data = get("list-post", None)
         if list_post_data:
-            if isinstance(list_post_data, list) and list_post_data:
-                addr = EmailAddress.from_mu(list_post_data[0])
-                if addr.email:
-                    msg.list_post_addr = addr
-            elif not isinstance(list_post_data, list):
-                addr = EmailAddress.from_mu(list_post_data)
-                if addr.email:
-                    msg.list_post_addr = addr
+            addr = EmailAddress.from_mu(list_post_data)
+            if addr.email:
+                msg.list_post_addr = addr
 
         # Priority
         msg.priority = get("priority", "normal")
@@ -558,11 +587,11 @@ class MuInterface:
         # so  thread:X  finds messages whose first reference is X — exactly
         # the descendants whose short reference chains (one hop only) would
         # otherwise be missed by a pure msgid-based search.
-        MAX_PASSES = 5
+        max_passes = 5
         current_results = pass1
         current_ids = expanded_ids
 
-        for _ in range(MAX_PASSES):
+        for _ in range(max_passes):
             thread_parts = " OR ".join(f"thread:{mid}" for mid in current_ids if mid)
             msgid_parts = _msgid_query(current_ids)
             combined = f"({msgid_parts}) OR ({thread_parts})"
@@ -623,24 +652,15 @@ class MuInterface:
             # Parse To, CC, BCC
             to_header = email_msg.get("To", "")
             if to_header:
-                # Use email.utils.getaddresses to properly handle quoted names with commas
-                parsed_addrs = email_utils.getaddresses([to_header])
-                msg.to_addrs = [EmailAddress(name=name, email=email) 
-                               for name, email in parsed_addrs if email]
+                msg.to_addrs = _parse_address_header(to_header)
 
             cc_header = email_msg.get("CC", "")
             if cc_header:
-                # Use email.utils.getaddresses to properly handle quoted names with commas
-                parsed_addrs = email_utils.getaddresses([cc_header])
-                msg.cc_addrs = [EmailAddress(name=name, email=email) 
-                              for name, email in parsed_addrs if email]
+                msg.cc_addrs = _parse_address_header(cc_header)
 
             bcc_header = email_msg.get("BCC", "")
             if bcc_header:
-                # Use email.utils.getaddresses to properly handle quoted names with commas
-                parsed_addrs = email_utils.getaddresses([bcc_header])
-                msg.bcc_addrs = [EmailAddress(name=name, email=email) 
-                                for name, email in parsed_addrs if email]
+                msg.bcc_addrs = _parse_address_header(bcc_header)
 
             # Parse Reply-To (use getaddresses for consistent multi-address handling)
             reply_to_header = email_msg.get("Reply-To", "")
@@ -669,123 +689,14 @@ class MuInterface:
             # Parse date
             date_header = email_msg.get("Date")
             if date_header:
-                from email.utils import parsedate_to_datetime
                 try:
-                    msg.date = parsedate_to_datetime(date_header)
+                    msg.date = email_utils.parsedate_to_datetime(date_header)
                 except (ValueError, TypeError):
                     msg.date = None
 
-            # Get body content
-            msg.body_txt = ""
-            msg.body_html = ""
-            msg.attachments = []
-
-            if email_msg.is_multipart():
-                # Track MIME part index for mu extract --parts command.
-                # mu numbers parts in depth-first walk order starting at 1, but
-                # skips structural multipart containers (mixed, alternative, related…).
-                # Exception: multipart/signed and multipart/encrypted ARE counted
-                # because mu lists them as extractable parts.
-                _COUNTED_MULTIPART = {"multipart/signed", "multipart/encrypted"}
-                part_index = 0
-                for part in email_msg.walk():
-                    content_type = part.get_content_type()
-                    if content_type.startswith("multipart/") and content_type not in _COUNTED_MULTIPART:
-                        continue
-                    part_index += 1
-                    if content_type.startswith("multipart/"):
-                        # Counted but not extractable as an attachment.
-                        continue
-                    content_disposition = part.get("Content-Disposition", "")
-                    filename = part.get_filename()
-
-                    # Detect attachments:
-                    # 1. Explicit attachment disposition
-                    # 2. Inline images/media with a filename (common in HTML emails)
-                    # 3. Non-text parts with a filename
-                    is_attachment = "attachment" in content_disposition
-                    is_inline_media = (
-                        "inline" in content_disposition and
-                        filename and
-                        not content_type.startswith("text/")
-                    )
-                    # Also catch parts with filename that aren't text body parts
-                    has_filename_not_text = (
-                        filename and
-                        content_type not in ("text/plain", "text/html")
-                    )
-
-                    if is_attachment or is_inline_media or has_filename_not_text:
-                        msg.attachments.append({
-                            "filename": filename or "attachment",
-                            "content_type": content_type,
-                            "size": len(part.get_payload(decode=True) or b""),
-                            "part_index": part_index,  # MIME part number for mu extract
-                            "inline": "inline" in content_disposition
-                        })
-                    elif content_type == "text/plain":
-                        payload = part.get_payload(decode=True)
-                        if payload and isinstance(payload, bytes):
-                            charset = part.get_content_charset() or "utf-8"
-                            try:
-                                text = payload.decode(charset, errors="replace")
-                            except LookupError:
-                                text = payload.decode("utf-8", errors="replace")
-                            # Concatenate multiple text/plain parts (e.g., body + footer)
-                            if msg.body_txt:
-                                msg.body_txt += "\n" + text
-                            else:
-                                msg.body_txt = text
-                    elif content_type == "text/html":
-                        payload = part.get_payload(decode=True)
-                        if payload and isinstance(payload, bytes):
-                            charset = part.get_content_charset() or "utf-8"
-                            try:
-                                html = payload.decode(charset, errors="replace")
-                            except LookupError:
-                                html = payload.decode("utf-8", errors="replace")
-                            # Concatenate multiple text/html parts
-                            if msg.body_html:
-                                msg.body_html += html
-                            else:
-                                msg.body_html = html
-                    elif content_type == "text/calendar" and msg.calendar_event is None:
-                        payload = part.get_payload(decode=True)
-                        if payload and isinstance(payload, bytes):
-                            charset = part.get_content_charset() or "utf-8"
-                            try:
-                                cal_text = payload.decode(charset, errors="replace")
-                            except LookupError:
-                                cal_text = payload.decode("utf-8", errors="replace")
-                            msg.calendar_event = parse_calendar(cal_text)
-            else:
-                content_type = email_msg.get_content_type()
-                payload = email_msg.get_payload(decode=True)
-                if payload and isinstance(payload, bytes):
-                    charset = email_msg.get_content_charset() or "utf-8"
-                    try:
-                        text = payload.decode(charset, errors="replace")
-                    except LookupError:
-                        text = payload.decode("utf-8", errors="replace")
-
-                    if content_type == "text/html":
-                        msg.body_html = text
-                    elif content_type == "text/calendar":
-                        msg.calendar_event = parse_calendar(text)
-                    else:
-                        msg.body_txt = text
+            self._read_body_and_attachments(email_msg, msg)
 
             # Capture extra headers for full-header display
-            _EXTRA_HEADER_NAMES = [
-                "Return-Path",
-                "Sender",
-                "X-Mailer",
-                "User-Agent",
-                "X-Spam-Status",
-                "X-Spam-Score",
-                "Authentication-Results",
-                "X-Originating-IP",
-            ]
             for hdr_name in _EXTRA_HEADER_NAMES:
                 val = email_msg.get(hdr_name, "")
                 if val:
@@ -806,6 +717,81 @@ class MuInterface:
         except Exception as e:
             print(f"Error parsing message: {e}")
             return None
+
+    @staticmethod
+    def _read_body_and_attachments(email_msg: Any, msg: EmailMessage) -> None:
+        """Fill msg's text/HTML bodies, calendar invite and attachment list."""
+        msg.body_txt = ""
+        msg.body_html = ""
+        msg.attachments = []
+
+        if not email_msg.is_multipart():
+            content_type = email_msg.get_content_type()
+            text = _decode_part_text(email_msg)
+            if text is not None:
+                if content_type == "text/html":
+                    msg.body_html = text
+                elif content_type == "text/calendar":
+                    msg.calendar_event = parse_calendar(text)
+                else:
+                    msg.body_txt = text
+            return
+
+        # Track the MIME part index for `mu extract --parts`, numbered the
+        # way mu does it (see _COUNTED_MULTIPART).
+        part_index = 0
+        for part in email_msg.walk():
+            content_type = part.get_content_type()
+            if content_type.startswith("multipart/") and content_type not in _COUNTED_MULTIPART:
+                continue
+            part_index += 1
+            if content_type.startswith("multipart/"):
+                # Counted but not extractable as an attachment.
+                continue
+            content_disposition = part.get("Content-Disposition", "")
+            filename = part.get_filename()
+
+            # Detect attachments:
+            # 1. Explicit attachment disposition
+            # 2. Inline images/media with a filename (common in HTML emails)
+            # 3. Non-text parts with a filename
+            is_attachment = "attachment" in content_disposition
+            is_inline_media = (
+                "inline" in content_disposition and
+                filename and
+                not content_type.startswith("text/")
+            )
+            # Also catch parts with filename that aren't text body parts
+            has_filename_not_text = (
+                filename and
+                content_type not in ("text/plain", "text/html")
+            )
+
+            if is_attachment or is_inline_media or has_filename_not_text:
+                msg.attachments.append({
+                    "filename": filename or "attachment",
+                    "content_type": content_type,
+                    "size": len(part.get_payload(decode=True) or b""),
+                    "part_index": part_index,  # MIME part number for mu extract
+                    "inline": "inline" in content_disposition
+                })
+            elif content_type == "text/plain":
+                text = _decode_part_text(part)
+                if text is not None:
+                    # Concatenate multiple text/plain parts (e.g., body + footer)
+                    if msg.body_txt:
+                        msg.body_txt += "\n" + text
+                    else:
+                        msg.body_txt = text
+            elif content_type == "text/html":
+                html = _decode_part_text(part)
+                if html is not None:
+                    # Concatenate multiple text/html parts
+                    msg.body_html += html
+            elif content_type == "text/calendar" and msg.calendar_event is None:
+                cal_text = _decode_part_text(part)
+                if cal_text is not None:
+                    msg.calendar_event = parse_calendar(cal_text)
 
     def _is_new_or_unread(self, path: str) -> bool:
         """Check if message path indicates new/unread status."""
