@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 try:
     import tomllib
@@ -22,6 +22,7 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "bor.conf"
 @dataclass
 class GeneralConfig:
     """General configuration settings."""
+
     max_messages: int = 400
     date_format: str = "%Y-%m-%d %H:%M"
     short_date_format: str = "%m/%d"
@@ -32,6 +33,7 @@ class GeneralConfig:
 @dataclass
 class FoldersConfig:
     """Maildir folder paths configuration."""
+
     inbox: str = "/INBOX"
     archive: str = "/Archive"
     drafts: str = "/Drafts"
@@ -42,6 +44,7 @@ class FoldersConfig:
 @dataclass
 class SmtpConfig:
     """SMTP server configuration."""
+
     server: str = "smtp.example.com"
     port: int = 587
     username: str = ""
@@ -53,6 +56,7 @@ class SmtpConfig:
 @dataclass
 class IdentityConfig:
     """User identity configuration."""
+
     name: str = ""
     email: str = ""
     organization: str = ""
@@ -62,6 +66,7 @@ class IdentityConfig:
 @dataclass
 class ColorsConfig:
     """Color scheme configuration."""
+
     unread: str = "blue"
     important: str = "dark_orange"
     marked: str = "reverse"
@@ -72,12 +77,14 @@ class ColorsConfig:
 @dataclass
 class SyncConfig:
     """Synchronization command configuration."""
+
     command: str = "mbsync -a"
 
 
 @dataclass
 class ThreadingConfig:
     """Threading display configuration."""
+
     enabled: bool = True
     indicator: str = "↳"
 
@@ -85,7 +92,8 @@ class ThreadingConfig:
 @dataclass
 class DisplayConfig:
     """Display settings configuration."""
-    columns: List[str] = field(default_factory=lambda: ["date", "from", "subject", "flags"])
+
+    columns: list[str] = field(default_factory=lambda: ["date", "from", "subject", "flags"])
     date_width: int = 12
     from_width: int = 20
     subject_width: int = 0
@@ -103,6 +111,7 @@ class DisplayConfig:
 @dataclass
 class HtmlConfig:
     """HTML rendering configuration."""
+
     renderer: str = "html2text"
     open_links_in_browser: bool = True
     browser_tmp_dir: str = ""
@@ -111,6 +120,7 @@ class HtmlConfig:
 @dataclass
 class AttachmentsConfig:
     """Attachments handling configuration."""
+
     save_directory: str = "~/Downloads"
     use_kitty_icat: bool = True
     force_kitty_support: bool = False
@@ -119,12 +129,14 @@ class AttachmentsConfig:
 @dataclass
 class EditorConfig:
     """Editor configuration."""
+
     external: str = ""
 
 
 @dataclass
 class Config:
     """Main configuration container."""
+
     general: GeneralConfig = field(default_factory=GeneralConfig)
     folders: FoldersConfig = field(default_factory=FoldersConfig)
     smtp: SmtpConfig = field(default_factory=SmtpConfig)
@@ -136,11 +148,11 @@ class Config:
     html: HtmlConfig = field(default_factory=HtmlConfig)
     attachments: AttachmentsConfig = field(default_factory=AttachmentsConfig)
     editor: EditorConfig = field(default_factory=EditorConfig)
-    aliases: Dict[str, str] = field(default_factory=dict)
-    email_aliases: Dict[str, str] = field(default_factory=dict)
+    aliases: dict[str, str] = field(default_factory=dict)
+    email_aliases: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Config":
+    def from_dict(cls, data: dict[str, Any]) -> Config:
         """
         Create a Config instance from a dictionary.
 
@@ -165,7 +177,7 @@ class Config:
         return config
 
 
-def load_config(path: Optional[Path] = None) -> Config:
+def load_config(path: Path | None = None) -> Config:
     """
     Load configuration from file.
 
@@ -189,7 +201,7 @@ def load_config(path: Optional[Path] = None) -> Config:
         return Config()
 
 
-def load_mailrc_aliases() -> Dict[str, str]:
+def load_mailrc_aliases() -> dict[str, str]:
     """
     Load email aliases from ~/.mailrc file.
 
@@ -197,13 +209,13 @@ def load_mailrc_aliases() -> Dict[str, str]:
         Dictionary mapping alias names to email addresses.
     """
     mailrc_path = Path.home() / ".mailrc"
-    aliases: Dict[str, str] = {}
+    aliases: dict[str, str] = {}
 
     if not mailrc_path.exists():
         return aliases
 
     try:
-        with open(mailrc_path, "r") as f:
+        with open(mailrc_path) as f:
             for line in f:
                 line = line.strip()
                 if line.startswith("alias "):
@@ -217,7 +229,7 @@ def load_mailrc_aliases() -> Dict[str, str]:
 
 
 # Global config instance
-_config: Optional[Config] = None
+_config: Config | None = None
 
 
 def get_config() -> Config:
@@ -262,7 +274,7 @@ def _parse_override_value(raw_value: str) -> Any:
         return raw_value
 
 
-def apply_config_overrides(config: Config, overrides: List[str]) -> Config:
+def apply_config_overrides(config: Config, overrides: list[str]) -> Config:
     """
     Apply CLI-style overrides to a config object.
 
@@ -278,9 +290,7 @@ def apply_config_overrides(config: Config, overrides: List[str]) -> Config:
         raw_value = raw_value.strip()
 
         if "." not in key_path:
-            raise ValueError(
-                f"Invalid override key '{key_path}': expected section.option"
-            )
+            raise ValueError(f"Invalid override key '{key_path}': expected section.option")
 
         section_name, option_name = key_path.split(".", 1)
 

@@ -74,6 +74,7 @@ def _kitty_image_size_params(img_w: int, img_h: int, avail_cols: int, avail_rows
         import fcntl
         import struct
         import termios
+
         with open("/dev/tty") as _tty:
             buf = struct.pack("HHHH", 0, 0, 0, 0)
             res = struct.unpack("HHHH", fcntl.ioctl(_tty.fileno(), termios.TIOCGWINSZ, buf))
@@ -190,9 +191,7 @@ class AttachmentPreview(ScrollableContainer):
 
         # Display a placeholder and trigger image render
         self.query_one("#preview-content", Static).update(
-            f"[Image: {title}]\n\n"
-            "Press Enter to open with system viewer\n"
-            "Press 's' to save to disk"
+            f"[Image: {title}]\n\nPress Enter to open with system viewer\nPress 's' to save to disk"
         )
 
         # Render the image using Kitty graphics after a brief delay
@@ -217,7 +216,7 @@ class AttachmentPreview(ScrollableContainer):
             # For JPEG and other formats, we need to convert to PNG first
             # Check if it's PNG by magic bytes
             img_width, img_height = 0, 0
-            if image_data[:4] != b'\x89PNG':
+            if image_data[:4] != b"\x89PNG":
                 # Try to convert to PNG using PIL if available
                 try:
                     import io
@@ -228,20 +227,20 @@ class AttachmentPreview(ScrollableContainer):
                     img = Image.open(io.BytesIO(image_data))
                     img_width, img_height = img.size  # capture before conversion
                     # Convert to RGBA if necessary (handles various formats)
-                    if img.mode not in ('RGB', 'RGBA'):
-                        img = img.convert('RGBA')
+                    if img.mode not in ("RGB", "RGBA"):
+                        img = img.convert("RGBA")
 
                     # Save as PNG to bytes
                     png_buffer = io.BytesIO()
-                    img.save(png_buffer, format='PNG')
+                    img.save(png_buffer, format="PNG")
                     image_data = png_buffer.getvalue()
                 except ImportError:
                     # PIL not available, try using convert command
                     try:
                         result = subprocess.run(
-                            ['convert', str(self._current_image_path), 'png:-'],
+                            ["convert", str(self._current_image_path), "png:-"],
                             capture_output=True,
-                            timeout=5
+                            timeout=5,
                         )
                         if result.returncode == 0:
                             image_data = result.stdout
@@ -253,9 +252,9 @@ class AttachmentPreview(ScrollableContainer):
             # Get image dimensions from PNG data (we converted to PNG above)
             # PNG dimensions are at bytes 16-24 (width: 16-20, height: 20-24)
             if img_width == 0 or img_height == 0:
-                if image_data[:4] == b'\x89PNG' and len(image_data) >= 24:
-                    img_width = int.from_bytes(image_data[16:20], 'big')
-                    img_height = int.from_bytes(image_data[20:24], 'big')
+                if image_data[:4] == b"\x89PNG" and len(image_data) >= 24:
+                    img_width = int.from_bytes(image_data[16:20], "big")
+                    img_height = int.from_bytes(image_data[20:24], "big")
 
             encoded = base64.standard_b64encode(image_data).decode("ascii")
 
@@ -286,7 +285,7 @@ class AttachmentPreview(ScrollableContainer):
 
             # Send the image in chunks (Kitty protocol requires chunking for large images)
             chunk_size = 4096
-            chunks = [encoded[i:i+chunk_size] for i in range(0, len(encoded), chunk_size)]
+            chunks = [encoded[i : i + chunk_size] for i in range(0, len(encoded), chunk_size)]
 
             # Use a unique image ID to avoid caching issues
             self._image_id_counter += 1
@@ -306,7 +305,9 @@ class AttachmentPreview(ScrollableContainer):
                     if i == 0:
                         # First chunk includes all the parameters
                         # i=<id> assigns an image ID
-                        tty.write(f"\033_Ga=T,f=100,i={img_id}{size_params},q=2,m={more};{chunk}\033\\")
+                        tty.write(
+                            f"\033_Ga=T,f=100,i={img_id}{size_params},q=2,m={more};{chunk}\033\\"
+                        )
                     else:
                         # Subsequent chunks just have m parameter and image ID
                         tty.write(f"\033_Gi={img_id},m={more};{chunk}\033\\")
@@ -353,11 +354,9 @@ class AttachmentsWidget(BaseTab):
     BINDINGS = [
         # Selection
         *[Binding(str(n), f"select({n})", f"Select {n}", show=False) for n in range(1, 10)],
-
         # Navigation
         Binding("up", "cursor_up", "Up", show=False),
         Binding("down", "cursor_down", "Down", show=False),
-
         # Actions
         Binding("enter", "open_attachment", "Open", priority=True),
         Binding("s", "save_attachment", "Save"),
@@ -438,6 +437,7 @@ class AttachmentsWidget(BaseTab):
 
         if self._temp_dir and self._temp_dir.exists():
             import shutil
+
             try:
                 shutil.rmtree(self._temp_dir)
             except Exception:
@@ -469,11 +469,7 @@ class AttachmentsWidget(BaseTab):
 
         # mu extract returns the actual path of the extracted file
         # (mu may normalize filenames, so we can't assume the exact name)
-        result = self.bor_app.mu.extract_attachment(
-            self.message.path,
-            part_index,
-            str(temp_dir)
-        )
+        result = self.bor_app.mu.extract_attachment(self.message.path, part_index, str(temp_dir))
 
         if result:
             return Path(result)
@@ -495,7 +491,10 @@ class AttachmentsWidget(BaseTab):
         preview = self.query_one("#preview", AttachmentPreview)
 
         # Check if we can preview this type
-        if content_type.startswith("text/") or content_type in ["application/json", "application/xml"]:
+        if content_type.startswith("text/") or content_type in [
+            "application/json",
+            "application/xml",
+        ]:
             # Text-based content - extract and display
             file_path = self._extract_attachment(index)
             if file_path:
@@ -518,10 +517,7 @@ class AttachmentsWidget(BaseTab):
                 else:
                     preview.show_message("Could not extract image")
             else:
-                preview.show_message(
-                    f"Image: {filename}\n\n"
-                    "Press Enter to open with system viewer"
-                )
+                preview.show_message(f"Image: {filename}\n\nPress Enter to open with system viewer")
 
         else:
             # Other types - show info
@@ -585,11 +581,7 @@ class AttachmentsWidget(BaseTab):
         save_dir.mkdir(parents=True, exist_ok=True)
 
         # mu extract saves with normalized filename, so we use the returned path
-        result = self.bor_app.mu.extract_attachment(
-            self.message.path,
-            part_index,
-            str(save_dir)
-        )
+        result = self.bor_app.mu.extract_attachment(self.message.path, part_index, str(save_dir))
 
         if result:
             return Path(result)

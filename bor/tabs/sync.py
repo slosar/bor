@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import shlex
-from typing import Optional
 
 from textual import work
 from textual.app import ComposeResult
@@ -66,7 +65,7 @@ class SyncWidget(BaseTab):
     """
 
     running: reactive[bool] = reactive(False)
-    exit_code: reactive[Optional[int]] = reactive(None)
+    exit_code: reactive[int | None] = reactive(None)
 
     def __init__(self, command: str, *args, **kwargs) -> None:
         """
@@ -77,7 +76,7 @@ class SyncWidget(BaseTab):
         """
         super().__init__(*args, **kwargs)
         self.command = command
-        self._process: Optional[asyncio.subprocess.Process] = None
+        self._process: asyncio.subprocess.Process | None = None
 
     def compose(self) -> ComposeResult:
         """Create the widget layout."""
@@ -140,10 +139,10 @@ class SyncWidget(BaseTab):
                 output.write_line("\nRunning mu index...")
                 self.bor_app.mu.index()
                 output.write_line("Index updated.")
-                
+
                 # Refresh the message index if it exists
                 await self._refresh_message_index()
-                
+
                 # Close this tab after successful sync
                 self.close_tab()
             else:
@@ -166,7 +165,7 @@ class SyncWidget(BaseTab):
         """Refresh the message index tab if it exists."""
         try:
             from bor.tabs.message_index import MessageIndexWidget
-            
+
             # Find the message index widget
             index_widget = self.app.query_one("MessageIndexWidget", MessageIndexWidget)
             if index_widget:

@@ -12,7 +12,6 @@ import gc
 import hashlib
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from textual import events
 from textual.app import App, ComposeResult, InvalidThemeError
@@ -152,11 +151,11 @@ class BorApp(App):
             self.theme = "textual-dark"
         self.mu: MuInterface = MuInterface()
         self._tab_counter: int = 0
-        self._tabs: Dict[str, TabPane] = {}
-        self._tab_order: List[str] = []
+        self._tabs: dict[str, TabPane] = {}
+        self._tab_order: list[str] = []
         # The message list shown in the index and the cursor position within
         # it; message views use these for N/P navigation.
-        self._current_messages: List[EmailMessage] = []
+        self._current_messages: list[EmailMessage] = []
         self._current_index: int = 0
         self._active_tab_id: str = "tab-0"
 
@@ -167,6 +166,7 @@ class BorApp(App):
             # Tab 0: Message Index (always present)
             with TabPane("Message Index", id="tab-0"):
                 from bor.tabs.message_index import MessageIndexWidget
+
                 yield MessageIndexWidget(id="message-index")
         yield Footer()
 
@@ -178,6 +178,7 @@ class BorApp(App):
     async def _focus_message_index(self) -> None:
         """Focus the message index after loading."""
         from bor.tabs.message_index import MessageIndexWidget
+
         try:
             widget = self.query_one(MessageIndexWidget)
             widget.focus()
@@ -187,7 +188,7 @@ class BorApp(App):
         except Exception:
             pass
 
-    def _focus_widget(self, widget: "BaseTab") -> None:
+    def _focus_widget(self, widget: BaseTab) -> None:
         """Focus a widget and its first focusable child."""
         try:
             widget.focus()
@@ -202,6 +203,7 @@ class BorApp(App):
     async def _load_inbox(self) -> None:
         """Load inbox messages on startup."""
         from bor.tabs.message_index import MessageIndexWidget
+
         widget = self.query_one(MessageIndexWidget)
         await widget.search(f'maildir:"{self.config.folders.inbox}"')
         # Focus after loading
@@ -306,6 +308,7 @@ class BorApp(App):
         if active_id == "tab-0":
             # Focus message index
             from bor.tabs.message_index import MessageIndexWidget
+
             try:
                 widget = self.query_one(MessageIndexWidget)
                 table = widget.query_one("DataTable")
@@ -341,7 +344,7 @@ class BorApp(App):
             tabs.active = tab_ids[(idx + step) % len(tab_ids)]
             self.call_later(lambda: self._focus_active_tab())
 
-    def add_tab(self, title: str, widget: "BaseTab", replace_id: Optional[str] = None) -> str:
+    def add_tab(self, title: str, widget: BaseTab, replace_id: str | None = None) -> str:
         """
         Add a new tab to the application.
 
@@ -364,7 +367,7 @@ class BorApp(App):
         tabs.add_pane(pane)
 
         # Now remove old tab if replacing (after new one is added to avoid focus loss)
-        replace_index: Optional[int] = None
+        replace_index: int | None = None
         if replace_id and replace_id in self._tabs:
             if replace_id in self._tab_order:
                 replace_index = self._tab_order.index(replace_id)
@@ -380,7 +383,7 @@ class BorApp(App):
         else:
             self._tab_order.append(tab_id)
         tabs.active = tab_id
-        
+
         # Defer focus to ensure widget is fully mounted
         self.call_later(lambda: self._focus_widget(widget))
 
@@ -426,7 +429,7 @@ class BorApp(App):
             tabs.active = "tab-0"
             self.call_later(lambda: self._focus_active_tab())
 
-    def open_message(self, message: EmailMessage, replace_tab: Optional[str] = None) -> None:
+    def open_message(self, message: EmailMessage, replace_tab: str | None = None) -> None:
         """
         Open a message in a new tab.
 
@@ -454,11 +457,11 @@ class BorApp(App):
 
     def open_compose(
         self,
-        reply_to: Optional[EmailMessage] = None,
-        forward: Optional[EmailMessage] = None,
-        edit_draft: Optional[EmailMessage] = None,
-        replace_tab: Optional[str] = None,
-        reply_all: bool = False
+        reply_to: EmailMessage | None = None,
+        forward: EmailMessage | None = None,
+        edit_draft: EmailMessage | None = None,
+        replace_tab: str | None = None,
+        reply_all: bool = False,
     ) -> None:
         """
         Open the compose tab.
@@ -473,10 +476,7 @@ class BorApp(App):
         from bor.tabs.compose import ComposeWidget
 
         widget = ComposeWidget(
-            reply_to=reply_to,
-            forward=forward,
-            edit_draft=edit_draft,
-            reply_all=reply_all
+            reply_to=reply_to, forward=forward, edit_draft=edit_draft, reply_all=reply_all
         )
 
         if reply_to:
@@ -490,7 +490,7 @@ class BorApp(App):
 
         self.add_tab(title, widget, replace_id=replace_tab)
 
-    def open_attachments(self, message: EmailMessage, replace_tab: Optional[str] = None) -> None:
+    def open_attachments(self, message: EmailMessage, replace_tab: str | None = None) -> None:
         """
         Open the attachments tab for a message.
 
@@ -532,7 +532,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Main entry point for Bor application."""
     parser = _build_arg_parser()
     args = parser.parse_args(argv)

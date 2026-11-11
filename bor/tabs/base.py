@@ -28,7 +28,7 @@ class BaseTab(Widget):
         super().__init__(*args, **kwargs)
 
     @property
-    def bor_app(self) -> "BorApp":
+    def bor_app(self) -> BorApp:
         """Get the Bor application instance."""
         return cast("BorApp", self.app)
 

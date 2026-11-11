@@ -12,6 +12,7 @@ import os
 import shutil
 import smtplib
 import tempfile
+from collections.abc import Callable
 from datetime import datetime
 from email import encoders
 from email.header import Header
@@ -19,7 +20,6 @@ from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set
 
 from textual import events
 from textual.app import ComposeResult
@@ -37,6 +37,7 @@ from bor.tabs.base import BaseTab
 
 try:
     import pyperclip
+
     HAS_PYPERCLIP = True
 except ImportError:
     HAS_PYPERCLIP = False
@@ -65,53 +66,72 @@ def _clip_paste() -> str:
 # Custom messages for Ctrl+L commands
 class ComposeCommand(Message):
     """Base class for compose commands."""
+
     pass
+
 
 class SendMessage(ComposeCommand):
     """Command to send the message."""
+
     pass
+
 
 class SaveDraft(ComposeCommand):
     """Command to save as draft."""
+
     pass
+
 
 class CancelCompose(ComposeCommand):
     """Command to cancel composition."""
+
     pass
+
 
 class FocusTo(ComposeCommand):
     """Command to focus To field."""
+
     pass
+
 
 class FocusCC(ComposeCommand):
     """Command to focus CC field."""
+
     pass
+
 
 class FocusBCC(ComposeCommand):
     """Command to focus BCC field."""
+
     pass
+
 
 class FocusSubject(ComposeCommand):
     """Command to focus Subject field."""
+
     pass
+
 
 class FocusEditor(ComposeCommand):
     """Command to focus Editor/body field."""
+
     pass
 
 
 class AttachFile(ComposeCommand):
     """Command to attach a file."""
+
     pass
 
 
 class AttachFilesFromDirectory(ComposeCommand):
     """Command to attach multiple files from a directory."""
+
     pass
 
 
 # Second key after Ctrl+L -> command posted to the ComposeWidget
-_CTRL_L_COMMANDS: Dict[str, type[ComposeCommand]] = {
+_CTRL_L_COMMANDS: dict[str, type[ComposeCommand]] = {
     "l": SendMessage,
     "d": SaveDraft,
     "x": CancelCompose,
@@ -178,7 +198,7 @@ class CtrlLMixin:
             event.prevent_default()
             event.stop()
             return True
-        
+
         return False
 
 
@@ -240,12 +260,12 @@ class AddressInput(InputEditingMixin, HeaderNavigationMixin, CtrlLMixin, Input):
     def __init__(self, *args, **kwargs) -> None:
         """Initialize address input."""
         super().__init__(*args, **kwargs)
-        self._contacts: List[EmailAddress] = []
+        self._contacts: list[EmailAddress] = []
         self._aliases: dict = {}
         self._completion_index: int = 0
-        self._completions: List[str] = []
+        self._completions: list[str] = []
 
-    def set_contacts(self, contacts: List[EmailAddress]) -> None:
+    def set_contacts(self, contacts: list[EmailAddress]) -> None:
         """
         Set the contacts list for completion.
 
@@ -266,13 +286,13 @@ class AddressInput(InputEditingMixin, HeaderNavigationMixin, CtrlLMixin, Input):
     def _find_address_start(self, text: str, cursor_pos: int) -> int:
         """
         Find the start of the current email address before cursor position.
-        
+
         Properly handles commas inside quoted strings (e.g., "Last, First" <email>).
-        
+
         Args:
             text: Full text of the input field
             cursor_pos: Current cursor position
-            
+
         Returns:
             Start position of current address
         """
@@ -280,29 +300,29 @@ class AddressInput(InputEditingMixin, HeaderNavigationMixin, CtrlLMixin, Input):
         # We need to respect quoted strings
         in_quotes = False
         escape_next = False
-        
+
         for i in range(cursor_pos - 1, -1, -1):
             char = text[i]
-            
+
             if escape_next:
                 escape_next = False
                 continue
-                
-            if char == '\\':
+
+            if char == "\\":
                 escape_next = True
                 continue
-                
+
             if char == '"':
                 in_quotes = not in_quotes
                 continue
-                
+
             # Only treat comma as separator if not in quotes
-            if char == ',' and not in_quotes:
+            if char == "," and not in_quotes:
                 return i + 1
-        
+
         return 0
-    
-    def _get_completions(self, prefix: str) -> List[str]:
+
+    def _get_completions(self, prefix: str) -> list[str]:
         """
         Get completion suggestions for a prefix.
 
@@ -339,7 +359,9 @@ class AddressInput(InputEditingMixin, HeaderNavigationMixin, CtrlLMixin, Input):
                     remote_contacts = []
 
                 if remote_contacts:
-                    existing_keys = {((c.email or "").lower() or (c.name or "").lower()) for c in self._contacts}
+                    existing_keys = {
+                        ((c.email or "").lower() or (c.name or "").lower()) for c in self._contacts
+                    }
                     for contact in remote_contacts:
                         key = (contact.email or "").lower() or (contact.name or "").lower()
                         if key and key not in existing_keys:
@@ -364,7 +386,7 @@ class AddressInput(InputEditingMixin, HeaderNavigationMixin, CtrlLMixin, Input):
             self._completions = []
             self._completion_index = 0
             return
-            
+
         if event.key == "tab":
             # Get the current word being typed
             value = self.value
@@ -385,14 +407,16 @@ class AddressInput(InputEditingMixin, HeaderNavigationMixin, CtrlLMixin, Input):
                 if self._completions:
                     # Insert completion
                     completion = self._completions[self._completion_index]
-                    new_value = value[:start] + (" " if start > 0 else "") + completion + value[cursor:]
+                    new_value = (
+                        value[:start] + (" " if start > 0 else "") + completion + value[cursor:]
+                    )
                     self.value = new_value
                     self.cursor_position = start + len(completion) + (1 if start > 0 else 0)
                     self._completion_index = (self._completion_index + 1) % len(self._completions)
                     event.prevent_default()
                     event.stop()
                     return
-                    
+
             # No prefix or no completions - move to next field
             self.screen.focus_next()
             event.prevent_default()
@@ -405,12 +429,12 @@ class AddressInput(InputEditingMixin, HeaderNavigationMixin, CtrlLMixin, Input):
 
 class SubjectInput(InputEditingMixin, HeaderNavigationMixin, CtrlLMixin, Input):
     """Input widget for subject line with Ctrl+L support."""
-    
+
     def __init__(self, *args, **kwargs) -> None:
         """Initialize subject input."""
         super().__init__(*args, **kwargs)
         self._ctrl_l_pressed = False
-    
+
     def _on_key(self, event: events.Key) -> None:
         """Handle key events; anything not handled here falls through to Input."""
         if self.handle_editing_key(event):
@@ -669,7 +693,7 @@ class ComposeTextArea(CtrlLMixin, TextArea):
             event.prevent_default()
             event.stop()
             return
-        
+
         # Check Ctrl+L sequences first
         if self.handle_ctrl_l_key(event):
             return
@@ -715,17 +739,17 @@ class ComposeTextArea(CtrlLMixin, TextArea):
 class FilePathInput(Input):
     """
     Input widget for file paths with tab completion.
-    
+
     Supports Tab completion for file/directory names.
     """
 
     def __init__(self, *args, **kwargs) -> None:
         """Initialize file path input."""
         super().__init__(*args, **kwargs)
-        self._completions: List[str] = []
+        self._completions: list[str] = []
         self.select_on_focus = False
 
-    def _get_completions(self, path_str: str) -> List[str]:
+    def _get_completions(self, path_str: str) -> list[str]:
         """
         Get completion suggestions for a path.
 
@@ -737,9 +761,9 @@ class FilePathInput(Input):
         """
         if not path_str:
             path_str = str(Path.home())
-        
+
         path = Path(path_str).expanduser()
-        
+
         # If path ends with / or is a directory without trailing content, list its contents
         if path_str.endswith("/") or (path.is_dir() and path_str == str(path)):
             parent = path
@@ -747,28 +771,28 @@ class FilePathInput(Input):
         else:
             parent = path.parent
             prefix = path.name.lower()
-        
+
         if not parent.exists():
             return []
-        
+
         completions = []
         try:
             for entry in sorted(parent.iterdir()):
                 name = entry.name
                 if prefix and not name.lower().startswith(prefix):
                     continue
-                
+
                 full_path = str(entry)
                 if entry.is_dir():
                     full_path += "/"
                 completions.append(full_path)
         except PermissionError:
             pass
-        
+
         return completions
 
     @staticmethod
-    def _longest_shared_completion_prefix(path_str: str, completions: List[str]) -> str:
+    def _longest_shared_completion_prefix(path_str: str, completions: list[str]) -> str:
         """Return the farthest bash-style completion prefix we can safely insert."""
         if not completions:
             return path_str
@@ -830,17 +854,20 @@ class FilePathInput(Input):
 
     class Submitted(Message):
         """File path submitted message."""
+
         def __init__(self, path: str) -> None:
             self.path = path
             super().__init__()
 
     class Cancelled(Message):
         """File path input cancelled message."""
+
         pass
 
     class CompletionsChanged(Message):
         """Completions list changed message."""
-        def __init__(self, completions: List[str], current_index: int) -> None:
+
+        def __init__(self, completions: list[str], current_index: int) -> None:
             self.completions = completions
             self.current_index = current_index
             super().__init__()
@@ -1060,12 +1087,12 @@ class ComposeWidget(BaseTab):
 
     def __init__(
         self,
-        reply_to: Optional[EmailMessage] = None,
-        forward: Optional[EmailMessage] = None,
-        edit_draft: Optional[EmailMessage] = None,
+        reply_to: EmailMessage | None = None,
+        forward: EmailMessage | None = None,
+        edit_draft: EmailMessage | None = None,
         reply_all: bool = False,
         *args,
-        **kwargs
+        **kwargs,
     ) -> None:
         """
         Initialize the compose widget.
@@ -1081,13 +1108,13 @@ class ComposeWidget(BaseTab):
         self.reply_all = reply_all
         self.forward = forward
         self.edit_draft = edit_draft
-        self.attachments: List[Path] = []
-        self._contacts: List[EmailAddress] = []
+        self.attachments: list[Path] = []
+        self._contacts: list[EmailAddress] = []
         self._email_aliases: dict = {}
         self._text_aliases: dict = {}
         self._last_attachment_dir: Path = Path.home()  # Track last used directory
-        self._file_path_mode: Optional[str] = None
-        self._bulk_picker_directory: Optional[Path] = None
+        self._file_path_mode: str | None = None
+        self._bulk_picker_directory: Path | None = None
         self._draft_deleted: bool = False
 
     def compose(self) -> ComposeResult:
@@ -1120,7 +1147,9 @@ class ComposeWidget(BaseTab):
                     yield FilePathInput(id="attachment-path-input", classes="attachment-path-input")
 
             with Vertical(classes="bulk-attachment-picker hidden", id="bulk-attachment-picker"):
-                yield Label("", id="bulk-attachment-picker-title", classes="bulk-attachment-picker-title")
+                yield Label(
+                    "", id="bulk-attachment-picker-title", classes="bulk-attachment-picker-title"
+                )
                 yield BulkAttachmentList(id="bulk-attachment-list")
 
             with Horizontal(classes="status-bar"):
@@ -1205,10 +1234,10 @@ class ComposeWidget(BaseTab):
             return
 
         config = get_config()
-        
+
         to_input = self.query_one("#to-input", AddressInput)
         to_addrs = self._reply_to_addresses(msg, config.identity.email)
-        
+
         # If reply all, move original TO/CC recipients to CC (excluding self and duplicates)
         if self.reply_all:
             cc_input = self.query_one("#cc-input", AddressInput)
@@ -1216,7 +1245,7 @@ class ComposeWidget(BaseTab):
 
             if cc_list:
                 cc_input.value = ", ".join(cc_list)
-        
+
         to_input.value = ", ".join(to_addrs)
 
         # Set Subject
@@ -1246,12 +1275,12 @@ class ComposeWidget(BaseTab):
     @classmethod
     def _dedupe_reply_addresses(
         cls,
-        addresses: List[EmailAddress],
+        addresses: list[EmailAddress],
         identity_email: str,
-        seen_emails: Optional[Set[str]] = None,
-    ) -> List[str]:
+        seen_emails: set[str] | None = None,
+    ) -> list[str]:
         """Format addresses while excluding self and duplicate email addresses."""
-        formatted: List[str] = []
+        formatted: list[str] = []
         seen = seen_emails if seen_emails is not None else set()
 
         for addr in addresses:
@@ -1268,7 +1297,7 @@ class ComposeWidget(BaseTab):
         return formatted
 
     @classmethod
-    def _reply_to_addresses(cls, msg: EmailMessage, identity_email: str) -> List[str]:
+    def _reply_to_addresses(cls, msg: EmailMessage, identity_email: str) -> list[str]:
         """Choose To recipients for a reply."""
         if cls._address_matches(msg.from_addr.email, identity_email):
             sent_to_addrs = cls._dedupe_reply_addresses(list(msg.to_addrs), identity_email)
@@ -1289,10 +1318,10 @@ class ComposeWidget(BaseTab):
         cls,
         msg: EmailMessage,
         identity_email: str,
-        to_addrs: List[str],
-    ) -> List[str]:
+        to_addrs: list[str],
+    ) -> list[str]:
         """Choose CC recipients for reply-all."""
-        seen_emails: Set[str] = set()
+        seen_emails: set[str] = set()
 
         for _, email_addr in email.utils.getaddresses(to_addrs):
             if email_addr:
@@ -1365,10 +1394,7 @@ class ComposeWidget(BaseTab):
         if msg.attachments:
             target_dir = Path(tempfile.mkdtemp(prefix="bor-forward-"))
             extracted = self._collect_forward_attachments(
-                msg.path,
-                msg.attachments,
-                target_dir,
-                self.bor_app.mu.extract_attachment
+                msg.path, msg.attachments, target_dir, self.bor_app.mu.extract_attachment
             )
             if extracted:
                 self.attachments.extend(extracted)
@@ -1376,10 +1402,10 @@ class ComposeWidget(BaseTab):
     @staticmethod
     def _collect_forward_attachments(
         message_path: str,
-        attachments: List[Dict[str, object]],
+        attachments: list[dict[str, object]],
         target_dir: Path,
-        extract_func: Callable[[str, int, str], Optional[str]]
-    ) -> List[Path]:
+        extract_func: Callable[[str, int, str], str | None],
+    ) -> list[Path]:
         """
         Extract attachments for forwarding without overwriting duplicates.
 
@@ -1392,8 +1418,8 @@ class ComposeWidget(BaseTab):
         Returns:
             List of extracted attachment paths in target_dir
         """
-        extracted: List[Path] = []
-        seen_names: Dict[str, int] = {}
+        extracted: list[Path] = []
+        seen_names: dict[str, int] = {}
 
         for index, attachment in enumerate(attachments):
             part_index = attachment.get("part_index") if isinstance(attachment, dict) else None
@@ -1483,6 +1509,7 @@ class ComposeWidget(BaseTab):
     def _refresh_index_after_draft_change(self) -> None:
         """Refresh the message index after draft changes."""
         from bor.tabs.message_index import MessageIndexWidget
+
         try:
             index_widget = self.bor_app.query_one(MessageIndexWidget)
         except Exception:
@@ -1509,48 +1536,48 @@ class ComposeWidget(BaseTab):
     def _format_address(self, name: str, email_addr: str) -> str:
         """
         Format an email address with proper encoding for non-ASCII names.
-        
+
         Args:
             name: Display name (may contain non-ASCII characters)
             email_addr: Email address
-            
+
         Returns:
             Properly formatted and encoded address string
         """
         if not name:
             return email_addr
-        
+
         # Check if name contains non-ASCII characters
         try:
-            name.encode('ascii')
+            name.encode("ascii")
             # ASCII only - use simple formataddr
             return email.utils.formataddr((name, email_addr))
         except UnicodeEncodeError:
             # Non-ASCII - encode the name using RFC 2047
-            encoded_name = Header(name, 'utf-8').encode()
+            encoded_name = Header(name, "utf-8").encode()
             return f"{encoded_name} <{email_addr}>"
 
     def _format_address_list(self, addresses: str) -> str:
         """
         Format a list of email addresses with proper encoding.
-        
+
         Args:
             addresses: Comma-separated list of addresses (may be "Name <email>" or just "email")
-            
+
         Returns:
             Properly formatted and encoded address list
         """
         if not addresses:
             return ""
-        
+
         result = []
         # Use email.utils.getaddresses which handles quoted strings and commas properly
         parsed = email.utils.getaddresses([addresses])
-        
+
         for name, email_addr in parsed:
             if email_addr:
                 result.append(self._format_address(name, email_addr))
-        
+
         return ", ".join(result)
 
     @staticmethod
@@ -1567,8 +1594,8 @@ class ComposeWidget(BaseTab):
         if not reply_to or not reply_to.msgid:
             return ""
 
-        chain: List[str] = []
-        seen: Set[str] = set()
+        chain: list[str] = []
+        seen: set[str] = set()
 
         for ref in reply_to.references or []:
             clean_ref = ref.strip()
@@ -1605,6 +1632,7 @@ class ComposeWidget(BaseTab):
 
         # Set headers - use formataddr for proper encoding of non-ASCII names
         from bor import __version__
+
         msg["From"] = self._format_address(config.identity.name, config.identity.email)
         msg["To"] = self._format_address_list(self.query_one("#to-input", AddressInput).value)
         msg["Subject"] = self.query_one("#subject-input", Input).value
@@ -1641,8 +1669,7 @@ class ComposeWidget(BaseTab):
                     part.set_payload(f.read())
                     encoders.encode_base64(part)
                     part.add_header(
-                        "Content-Disposition",
-                        f"attachment; filename={attachment_path.name}"
+                        "Content-Disposition", f"attachment; filename={attachment_path.name}"
                     )
                     msg.attach(part)
             except Exception:
@@ -1678,6 +1705,7 @@ class ComposeWidget(BaseTab):
                     # Try to get from keyring
                     try:
                         import keyring
+
                         password = keyring.get_password("bor-email", config.smtp.username)
                     except Exception:
                         pass
@@ -1719,7 +1747,7 @@ class ComposeWidget(BaseTab):
         config = get_config()
         return self._save_to_folder(config.folders.drafts)
 
-    def _save_to_folder(self, folder: str, msg: Optional[MIMEMultipart] = None) -> bool:
+    def _save_to_folder(self, folder: str, msg: MIMEMultipart | None = None) -> bool:
         """
         Save the message to a maildir folder.
 
@@ -1811,10 +1839,10 @@ class ComposeWidget(BaseTab):
         """Handle file path submitted for attachment or insertion."""
         path = Path(event.path).expanduser()
         mode = self._file_path_mode or "attach"
-        
+
         # Hide the input bar
         self.query_one("#attachment-input-bar", Vertical).add_class("hidden")
-        
+
         if mode == "bulk_attach_dir":
             if not path.exists():
                 self.notify(f"Directory not found: {path}", severity="error")
@@ -1865,11 +1893,11 @@ class ComposeWidget(BaseTab):
                 self.notify(f"Attached: {path.name}")
             else:
                 self.notify(f"Already attached: {path.name}", severity="warning")
-        
+
         # Remember the directory for next time
         self._last_attachment_dir = path.parent
         self._file_path_mode = None
-        
+
         # Return focus to body
         body_input.focus()
 
@@ -1878,7 +1906,7 @@ class ComposeWidget(BaseTab):
         # Hide the input bar
         self.query_one("#attachment-input-bar", Vertical).add_class("hidden")
         self._file_path_mode = None
-        
+
         # Return focus to body
         self.query_one("#body-input").focus()
 
@@ -1896,9 +1924,7 @@ class ComposeWidget(BaseTab):
     ) -> None:
         """Toggle all files in the picker."""
         list_view = self.query_one("#bulk-attachment-list", BulkAttachmentList)
-        items = [
-            item for item in list_view.children if isinstance(item, BulkAttachmentItem)
-        ]
+        items = [item for item in list_view.children if isinstance(item, BulkAttachmentItem)]
         should_select = any(not item.selected for item in items)
         for item in items:
             item.set_selected(should_select)
@@ -1939,14 +1965,16 @@ class ComposeWidget(BaseTab):
                 severity="warning",
             )
 
-    def on_file_path_input_completions_changed(self, event: FilePathInput.CompletionsChanged) -> None:
+    def on_file_path_input_completions_changed(
+        self, event: FilePathInput.CompletionsChanged
+    ) -> None:
         """Handle completions list change."""
         label = self.query_one("#attachment-completions", Label)
-        
+
         if not event.completions:
             label.update("")
             return
-        
+
         # Format completions, highlighting the current one
         parts = []
         for i, comp in enumerate(event.completions):
@@ -1958,7 +1986,7 @@ class ComposeWidget(BaseTab):
                 parts.append(f"[bold reverse]{name}[/bold reverse]")
             else:
                 parts.append(name)
-        
+
         label.update(" | ".join(parts))
 
     # Actions
@@ -1987,10 +2015,10 @@ class ComposeWidget(BaseTab):
         # Show the attachment input bar
         self.query_one("#attachment-input-bar", Vertical).remove_class("hidden")
         self.query_one("#file-path-input-label", Label).update(label)
-        
+
         # Clear completions display initially
         self.query_one("#attachment-completions", Label).update("")
-        
+
         # Set start path to last used directory and focus
         path_input = self.query_one("#attachment-path-input", FilePathInput)
         path_input.value = str(self._last_attachment_dir) + "/"
@@ -1998,9 +2026,9 @@ class ComposeWidget(BaseTab):
         path_input.focus()
 
     @staticmethod
-    def _list_bulk_attachable_files(directory: Path) -> List[Path]:
+    def _list_bulk_attachable_files(directory: Path) -> list[Path]:
         """Return the direct child files in a directory, sorted by name."""
-        files: List[Path] = []
+        files: list[Path] = []
         try:
             for entry in sorted(directory.iterdir(), key=lambda path: path.name.lower()):
                 if entry.is_file():
@@ -2037,7 +2065,7 @@ class ComposeWidget(BaseTab):
         self.query_one("#bulk-attachment-picker", Vertical).add_class("hidden")
         self._bulk_picker_directory = None
 
-    def _get_selected_bulk_attachment_paths(self) -> List[Path]:
+    def _get_selected_bulk_attachment_paths(self) -> list[Path]:
         """Return the currently selected paths in the bulk picker."""
         list_view = self.query_one("#bulk-attachment-list", BulkAttachmentList)
         return [
