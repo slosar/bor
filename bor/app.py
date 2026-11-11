@@ -542,6 +542,13 @@ class BorApp(App):
                     return
         self.add_tab("LLM", LLMWidget(initial_question=question))
 
+    def llm_results_changed(self) -> None:
+        """The LLM published a new result set: refresh the index if it shows them."""
+        from bor.tabs.message_index import MessageIndexWidget
+
+        widget = self.query_one(MessageIndexWidget)
+        self.run_worker(widget.on_llm_results_changed(), group="index-refresh", exclusive=True)
+
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     """Build CLI parser for Bor."""

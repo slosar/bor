@@ -123,8 +123,10 @@ normalization.
 The LLM assistant. Nothing here imports Textual widgets except lazily, and
 nothing changes the mailbox.
 
-- `tools.py` - `MailTools`: `search_mail`, `read_message` and `read_thread` over
-  `MuInterface`, in OpenAI function-calling format. They run on worker threads,
+- `tools.py` - `MailTools`: `search_mail`, `read_message`, `read_thread` and
+  `show_results` over `MuInterface`, in OpenAI function-calling format.
+  `show_results` publishes a set of Message-IDs through a callback to the
+  session; the index shows them with `K`. They run on worker threads,
   return text for the model plus a one-line summary for the transcript, never
   raise, and read with `view(mark_as_read=False)`. `MessageHandles` gives the
   model short names (`m1`, `m2`, ...) instead of Message-IDs. `strip_quoted()`
@@ -138,7 +140,8 @@ nothing changes the mailbox.
 - `prompt.py` - The system prompt (identity, folders, mu query cheat sheet, the
   user's notes file) and the context block sent with each question.
 - `session.py` - `LLMSession` on `BorApp.llm`: API key lookup, the conversation,
-  handles and transcript, so they outlive the LLM tab. `make_client()` builds the
+  handles and transcript, so they outlive the LLM tab, and the result set
+  (`results`, `results_title`), which also outlives the conversation. `make_client()` builds the
   `AsyncOpenAI` client (tests replace it).
 
 ### bor/app.py
@@ -166,6 +169,10 @@ Tab widgets for different views.
 #### message_index.py
 - `MessageIndexWidget` - Message list with navigation and actions
 - `SearchInput` - Search input with history (stored in `~/.local/share/bor/search_history`)
+- LLM results view (`K`): `show_llm_results()` looks the session's Message-IDs up
+  with one `msgid:` OR-query; `rerun_view()` (refresh, return to the tab,
+  archive/delete) re-runs it, and `current_query` keeps the previous search for
+  `Shift+K`
 - `ConfirmBar`, `FlagBar`, `ReplyBar` - One-line prompts, also used by the message view
 - `apply_flag()` - Applies a `FlagBar` choice to a message; shared with the message view
 

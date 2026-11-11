@@ -45,7 +45,11 @@ class LLMSession:
         self.mu = mu
         self.config = config
         self.handles = MessageHandles()
-        self.tools = MailTools(mu, self.handles)
+        self.tools = MailTools(mu, self.handles, on_results=self.set_results)
+        # The messages the model last showed (Message-IDs), for the index's `k` view.
+        # Independent of the conversation: Ctrl+N keeps them, `K` clears them.
+        self.results: list[str] = []
+        self.results_title: str = ""
         self.transcript: list[TranscriptEntry] = []
         self.history: list[str] = []  # questions asked, for Up/Down in the input
         self._conversation: Conversation | None = None
@@ -115,6 +119,15 @@ class LLMSession:
             self.history.remove(question)
         self.history.append(question)
         del self.history[:-MAX_HISTORY]
+
+    def set_results(self, msgids: list[str], title: str) -> None:
+        """Replace the result set (called from the show_results tool's worker thread)."""
+        self.results = list(msgids)
+        self.results_title = title
+
+    def clear_results(self) -> None:
+        self.results = []
+        self.results_title = ""
 
     def new_conversation(self) -> None:
         """Forget the conversation, its handles and transcript (history stays)."""

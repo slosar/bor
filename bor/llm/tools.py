@@ -138,19 +138,52 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "show_results",
+            "description": (
+                "Show a set of messages to the user in Bor's results view, replacing the "
+                "previous set. Use it for the messages that answer a search, or that a "
+                "summary is based on."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": 'Message handles, e.g. ["m3", "m7"]',
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": 'A few words describing the set, e.g. "LN2 tests at SSL, 2025"',
+                    },
+                },
+                "required": ["ids", "title"],
+            },
+        },
+    },
 ]
+
+# Called with (message-IDs, title) when the model publishes a result set
+ResultsCallback = Callable[[list[str], str], None]
 
 
 class MailTools:
     """Carries out the model's tool calls against mu."""
 
-    def __init__(self, mu: MuInterface, handles: MessageHandles) -> None:
+    def __init__(
+        self, mu: MuInterface, handles: MessageHandles, on_results: ResultsCallback | None = None
+    ) -> None:
         self.mu = mu
         self.handles = handles
+        self.on_results = on_results
         self._handlers: dict[str, Callable[[dict[str, Any]], ToolResult]] = {
             "search_mail": self._search_mail,
             "read_message": self._read_message,
             "read_thread": self._read_thread,
+            "show_results": self._show_results,
         }
 
     @property
@@ -237,8 +270,33 @@ class MailTools:
             parts.append(f"=== {self._summary_line(item, item_handle)} ===\n{body}")
         content = f"Thread of {len(thread) + omitted} messages:\n\n" + "\n\n".join(parts)
         total = len(thread) + omitted
-        noun = "message" if total == 1 else "messages"
-        return ToolResult(content, f"thread: {_describe(msg)} → {total} {noun}")
+        return ToolResult(content, f"thread: {_describe(msg)} → {_count(total)}")
+
+    def _show_results(self, args: dict[str, Any]) -> ToolResult:
+        ids = args.get("ids")
+        if isinstance(ids, str):  # a single handle, or a comma-separated list
+            ids = ids.split(",")
+        if not isinstance(ids, list):
+            raise ToolError("ids must be a list of message handles")
+        title = str(args.get("title") or "").strip() or "LLM results"
+
+        msgids: list[str] = []
+        unknown: list[str] = []
+        for handle in ids:
+            msg = self.handles.get(str(handle))
+            if msg is None or not msg.msgid:
+                unknown.append(str(handle))
+            elif msg.msgid not in msgids:
+                msgids.append(msg.msgid)
+        if not msgids:
+            raise ToolError(f"none of {ids!r} is a known message handle")
+
+        if self.on_results is not None:
+            self.on_results(msgids, title)
+        content = f"Showing {_count(len(msgids))} in Bor's results view."
+        if unknown:
+            content += f" Ignored unknown handles: {', '.join(unknown)}."
+        return ToolResult(content, f'results: "{title}" → {_count(len(msgids))} (k in the index)')
 
     # ------------------------------------------------------------------
     # Helpers
@@ -403,6 +461,10 @@ def _cap(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + f"\n[… {len(text) - limit} more characters not shown]"
+
+
+def _count(n: int) -> str:
+    return f"{n} message" if n == 1 else f"{n} messages"
 
 
 def _sort_date(value: datetime | None) -> float:

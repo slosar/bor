@@ -90,6 +90,13 @@ In the search prompt:
 | Key | Action |
 |-----|--------|
 | Q | Open the LLM tab (or switch to it) to ask about your mail |
+| K | Show the LLM results: the messages the model last picked for a search or summary |
+| Shift+K | Clear the LLM results (and return to the previous search) |
+
+The LLM results stay until cleared or replaced by the model's next set; other
+searches and folders (`S`, `I`/`O`/`U`) leave them in place for the next `K`.
+Messages are found by Message-ID, so archived ones stay in the set. The status
+bar shows `LLM: <title>` while the view is shown.
 
 ## Message View
 
@@ -246,8 +253,9 @@ answers in the tab. See the `[llm]` section in [configuration.md](configuration.
 | Esc | Cancel the question being answered; otherwise return to the index |
 | Ctrl+N | Start a new conversation |
 
-Each step the model takes (a search, reading a message or a thread) is shown as
-a dim line, followed by the answer and its token use and cost. You can switch
+Each step the model takes (a search, reading a message or a thread, publishing
+a result set for `K` in the index) is shown as a dim line, followed by the
+answer and its token use and cost. You can switch
 to other tabs while it works; a notification says when the answer is ready.
 The conversation lasts until `Ctrl+N` or quitting Bor (closing the tab keeps it).
 

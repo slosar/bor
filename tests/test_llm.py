@@ -598,3 +598,133 @@ async def test_api_key_falls_back_to_environment(tmp_path: Path, monkeypatch) ->
 
     assert session.api_key() == "from-env"
     assert session.unavailable_reason() is None
+
+
+# ----------------------------------------------------------------------
+# Results view (show_results, k / K)
+
+
+def test_show_results_publishes_message_ids() -> None:
+    published = []
+    tools = MailTools(_mu([_message(n) for n in range(1, 4)]), MessageHandles(),
+                      on_results=lambda ids, title: published.append((ids, title)))
+    tools.run("search_mail", json.dumps({"query": "x"}))
+
+    result = tools.run("show_results", json.dumps({"ids": ["m3", "m1", "m3", "m9"], "title": "Picked"}))
+
+    assert published == [(["id3@example.org", "id1@example.org"], "Picked")]
+    assert result.content == "Showing 2 messages in Bor's results view. Ignored unknown handles: m9."
+    assert result.summary == 'results: "Picked" → 2 messages (k in the index)'
+
+    # A bare comma-separated string is accepted; nothing known is an error
+    assert not tools.run("show_results", json.dumps({"ids": "m2, m1", "title": "t"})).error
+    assert published[-1][0] == ["id2@example.org", "id1@example.org"]
+    assert tools.run("show_results", json.dumps({"ids": ["m42"], "title": "t"})).error
+
+
+def _results_mu(inbox):
+    """mu whose find answers msgid: queries from `inbox`, and anything else with all of it."""
+    mu = MagicMock()
+    mu.find_contacts.return_value = []
+
+    def find(query, maxnum=None, threads=False, **kwargs):
+        if "msgid:" in query:
+            return [m for m in inbox if f'msgid:"{m.msgid}"' in query]
+        return list(inbox)
+
+    mu.find.side_effect = find
+    return mu
+
+
+def _status(app) -> str:
+    from textual.widgets import Label
+
+    return str(app.query_one("#status-label", Label).render())
+
+
+async def test_k_shows_the_llm_results_until_cleared(tmp_path: Path) -> None:
+    from textual.widgets import DataTable
+
+    inbox = [_message(n) for n in range(1, 5)]
+    client = FakeClient(
+        [
+            tool_response("search_mail", {"query": "x"}, "c1"),
+            tool_response("show_results", {"ids": ["m2", "m3"], "title": "Two [picked]"}, "c2"),
+            text_response("Here they are."),
+            tool_response("show_results", {"ids": ["m4"], "title": "Just one"}, "c3"),
+            text_response("Narrowed."),
+        ]
+    )
+    with patch("bor.app.get_config", return_value=_llm_config(tmp_path)):
+        with patch("bor.app.MuInterface", return_value=_results_mu(inbox)):
+            with patch("bor.llm.session.make_client", return_value=client):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await _settle(pilot, app)
+                    table = app.query_one(DataTable)
+                    assert table.row_count == 4
+
+                    # Nothing to show yet
+                    await pilot.press("k")
+                    await _settle(pilot, app)
+                    assert table.row_count == 4 and "LLM" not in _status(app)
+
+                    app.open_llm("which two?")
+                    await _settle(pilot, app)
+                    assert app.llm.results == ["id2@example.org", "id3@example.org"]
+                    assert any(e.text.startswith('results: "Two [picked]"') for e in app.llm.transcript)
+
+                    await pilot.press("escape")  # back to the index
+                    await _settle(pilot, app)
+                    await pilot.press("k")
+                    await _settle(pilot, app)
+                    assert table.row_count == 2
+                    assert _status(app).startswith("LLM: Two [picked] | 2 messages")
+
+                    # Threading toggles within the view
+                    await pilot.press("t")
+                    await _settle(pilot, app)
+                    assert table.row_count == 2 and _status(app).startswith("LLM:")
+
+                    # Leaving for another tab and coming back keeps the view
+                    await pilot.press("q")
+                    await _settle(pilot, app)
+                    # A new set from the model replaces the shown one
+                    _llm_tab(app).ask("only the last")
+                    await _settle(pilot, app)
+                    await pilot.press("escape")
+                    await _settle(pilot, app)
+                    assert table.row_count == 1
+                    assert _status(app).startswith("LLM: Just one | 1 messages")
+
+                    # K clears and returns to the previous search
+                    await pilot.press("K")
+                    await _settle(pilot, app)
+                    assert app.llm.results == []
+                    assert table.row_count == 4 and "LLM" not in _status(app)
+
+
+async def test_folder_keys_leave_the_results_view(tmp_path: Path) -> None:
+    from textual.widgets import DataTable
+
+    inbox = [_message(n) for n in range(1, 4)]
+    with patch("bor.app.get_config", return_value=_llm_config(tmp_path)):
+        with patch("bor.app.MuInterface", return_value=_results_mu(inbox)):
+            from bor.app import BorApp
+
+            app = BorApp()
+            async with app.run_test() as pilot:
+                await _settle(pilot, app)
+                app.llm.set_results(["id1@example.org"], "One")
+                await pilot.press("k")
+                await _settle(pilot, app)
+                assert app.query_one(DataTable).row_count == 1
+
+                await pilot.press("i")
+                await _settle(pilot, app)
+                assert app.query_one(DataTable).row_count == 3
+                assert "LLM" not in _status(app)
+                # The set itself is kept for the next k
+                assert app.llm.results == ["id1@example.org"]

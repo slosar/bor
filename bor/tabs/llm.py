@@ -246,6 +246,8 @@ class LLMWidget(BaseTab):
                 elif isinstance(event, ToolFinished):
                     kind = "tool_error" if event.result.error else "tool"
                     self._add(kind, event.result.summary)
+                    if event.name == "show_results" and not event.result.error:
+                        self.bor_app.llm_results_changed()
                     self._set_status("Thinking…  (Esc cancels)")
                 elif isinstance(event, TurnFinished):
                     # Text written before the last tool call is not the answer

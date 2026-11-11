@@ -43,6 +43,10 @@ spelled-out forms together, e.g. `(LN2 OR LN OR "liquid nitrogen")`.
 - Narrow large result sets with dates, people or folders.
 - Search results only show headers. Read messages, or whole conversations with \
 read_thread, before describing what they say.
+- When your answer is a set of messages (a search) or rests on specific messages \
+(a summary), call show_results once with all of them and a short title, so the \
+user can open them in Bor. Include every relevant message, not only the ones you \
+mention; leave out the ones you found irrelevant.
 - Tool results name messages by handles such as m12. Use only handles you were \
 given. Handles mean nothing to the user: in answers, refer to messages by sender, \
 date and subject.

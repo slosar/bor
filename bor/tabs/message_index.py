@@ -435,6 +435,8 @@ class MessageIndexWidget(BaseTab):
         Binding("u", "show_drafts", "Drafts"),
         Binding("l", "sync", "Sync"),
         Binding("q", "open_llm", "Ask LLM"),
+        Binding("k", "show_llm_results", "LLM Results"),
+        Binding("K", "clear_llm_results", "Clear LLM Results", show=False),
         Binding("m", "mark_message", "Mark"),
         Binding("x", "archive", "Archive Msg"),
         Binding("a", "apply_flag", "Apply Flag"),
@@ -511,6 +513,9 @@ class MessageIndexWidget(BaseTab):
         self.current_query: str = ""
         # Message whose thread is shown (Ctrl+T); None when showing current_query
         self._thread_anchor: EmailMessage | None = None
+        # Showing the LLM's result set (k). current_query keeps the previous
+        # search, so clearing the results (K) can return to it.
+        self._llm_view: bool = False
         self.threading_enabled: bool = get_config().threading.enabled
         self._search_visible: bool = False
         self._pending_action: Callable | None = None
@@ -554,6 +559,7 @@ class MessageIndexWidget(BaseTab):
 
         self.current_query = query
         self._thread_anchor = None
+        self._llm_view = False
         # `mu find` spawns a subprocess and takes ~40ms on a large index, which
         # is long enough to be felt as a stall if it runs on the event loop.
         self.messages = await asyncio.to_thread(
@@ -747,7 +753,11 @@ class MessageIndexWidget(BaseTab):
             threading_status = "threaded" if self.threading_enabled else "flat"
         marked_count = len(self.marked_messages)
         marked_str = f" | {marked_count} marked" if marked_count > 0 else ""
-        label.update(f"{len(self.messages)} messages ({threading_status}){marked_str}")
+        text = f"{len(self.messages)} messages ({threading_status}){marked_str}"
+        if self._llm_view:
+            text = f"LLM: {self.bor_app.llm.results_title} | {text} | K clears"
+        # Text, not markup: the title is written by the model
+        label.update(Text(text))
 
     def _get_current_message(self) -> EmailMessage | None:
         """Get the currently selected message."""
@@ -903,7 +913,7 @@ class MessageIndexWidget(BaseTab):
         await asyncio.to_thread(self.bor_app.mu.index)
 
         # Re-run current search
-        if self._thread_anchor is not None or self.current_query:
+        if self._llm_view or self._thread_anchor is not None or self.current_query:
             await self.rerun_view()
         else:
             # Default to inbox
@@ -917,7 +927,7 @@ class MessageIndexWidget(BaseTab):
         current_index = self._get_current_index()
         marked_ids = self._capture_marked_message_ids()
 
-        if self._thread_anchor is not None or self.current_query:
+        if self._llm_view or self._thread_anchor is not None or self.current_query:
             await self.rerun_view()
         else:
             config = get_config()
@@ -1090,7 +1100,10 @@ class MessageIndexWidget(BaseTab):
     async def action_toggle_threading(self) -> None:
         """Toggle threading on/off."""
         self.threading_enabled = not self.threading_enabled
-        await self.search(self.current_query)
+        if self._llm_view:
+            await self.show_llm_results()
+        else:
+            await self.search(self.current_query)
 
     async def action_show_thread(self) -> None:
         """Show all messages in the current thread, with the cursor on this one."""
@@ -1108,6 +1121,7 @@ class MessageIndexWidget(BaseTab):
         # find_thread() runs several `mu find` passes; keep them off the UI.
         self.messages = await asyncio.to_thread(self._find_thread, anchor)
         self._thread_anchor = anchor
+        self._llm_view = False
         self.bor_app._current_messages = self.messages
         self.bor_app._current_index = 0
         # Marks are row positions in the previous list
@@ -1122,11 +1136,67 @@ class MessageIndexWidget(BaseTab):
         return mu.find_thread(anchor)
 
     async def rerun_view(self) -> None:
-        """Re-run whatever the list shows: the thread view or the current query."""
-        if self._thread_anchor is not None:
+        """Re-run whatever the list shows: LLM results, a thread or the current query."""
+        if self._llm_view and self.bor_app.llm.results:
+            await self.show_llm_results()
+        elif self._thread_anchor is not None:
             await self._show_thread(self._thread_anchor)
         else:
-            await self.search(self.current_query)
+            await self.search(self.current_query or self._inbox_query())
+
+    def _inbox_query(self) -> str:
+        return f'maildir:"{get_config().folders.inbox}"'
+
+    # LLM results (k / K)
+
+    async def action_show_llm_results(self) -> None:
+        """k: show the messages the LLM last picked."""
+        if not self.bor_app.llm.results:
+            self.app.notify("No LLM results yet. Press Q to ask.", markup=False)
+            return
+        await self.show_llm_results()
+
+    async def show_llm_results(self) -> None:
+        """Replace the list with the LLM's result set (looked up by Message-ID)."""
+        session = self.bor_app.llm
+        msgids = list(session.results)
+        config = get_config()
+        self.messages = await asyncio.to_thread(
+            self._find_by_msgids, msgids, self.threading_enabled, config.general.max_messages
+        )
+        self._llm_view = True
+        self._thread_anchor = None
+        self.bor_app._current_messages = self.messages
+        self.bor_app._current_index = 0
+        self.marked_messages.clear()
+        await self._refresh_table()
+        self._update_status()
+
+    def _find_by_msgids(
+        self, msgids: list[str], use_threads: bool, maxnum: int
+    ) -> list[EmailMessage]:
+        """Find messages by Message-ID, wherever they are now. Runs on a worker thread."""
+        if not msgids:
+            return []
+        mu = self.bor_app.mu
+        mu.wait_for_reindex()
+        query = " OR ".join(f'msgid:"{msgid.replace(chr(34), "")}"' for msgid in msgids)
+        return mu.find(query, maxnum=maxnum, threads=use_threads, descending=True)
+
+    async def action_clear_llm_results(self) -> None:
+        """K: forget the LLM's result set; leave its view for the previous search."""
+        session = self.bor_app.llm
+        if not session.results:
+            return
+        session.clear_results()
+        self.app.notify("LLM results cleared.", markup=False)
+        if self._llm_view:
+            await self.search(self.current_query or self._inbox_query())
+
+    async def on_llm_results_changed(self) -> None:
+        """The model showed a new set: refresh the list if it is showing the old one."""
+        if self._llm_view:
+            await self.show_llm_results()
 
     def action_delete(self) -> None:
         """Delete marked messages or current message with confirmation."""

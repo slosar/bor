@@ -147,6 +147,7 @@ bor
 | Ctrl+T | Show thread |
 | L | Sync |
 | Q | Ask the LLM about your mail |
+| K / Shift+K | Show / clear the messages the LLM picked |
 | Z | Undo move |
 | Ctrl+R | Refresh index |
 
