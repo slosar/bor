@@ -1,6 +1,13 @@
 # Bor Configuration Guide
 
 Bor uses a TOML configuration file located at `~/.config/bor.conf`.
+A different file can be given with `bor --config PATH`, and individual options
+can be overridden on the command line with `bor --set section.option=value`
+(repeatable; values use TOML syntax, e.g. `--set general.max_messages=200`).
+
+Unknown or misspelled sections and options are ignored, and Bor lists each one
+in a warning notification when it starts. If the file cannot be parsed at all
+(a TOML syntax error), Bor uses the built-in defaults and says so the same way.
 
 ## Configuration Sections
 
@@ -13,13 +20,14 @@ General application settings.
 # Maximum number of messages to display in message list
 max_messages = 400
 
-# Date format for message list (strftime format)
+# Message list date column (strftime formats):
+# messages from earlier years
 date_format = "%Y-%m-%d %H:%M"
 
-# Short date format for compact view
+# messages from earlier this year
 short_date_format = "%m/%d"
 
-# Time format for today's messages
+# today's messages
 time_format = "%H:%M"
 
 # Textual UI theme
@@ -56,6 +64,12 @@ use_tls = true
 use_starttls = true
 ```
 
+`use_starttls = true` connects in plain text and upgrades with STARTTLS (usually
+port 587); it takes precedence over `use_tls`. With `use_starttls = false`,
+`use_tls = true` uses implicit TLS (SMTPS, usually port 465), and setting both to
+false sends unencrypted. Bor logs in only when `username` is set and a password
+is found; there is no interactive password prompt.
+
 For security, it's recommended to store your password in the system keyring:
 
 ```bash
@@ -79,27 +93,31 @@ Your Organization
 """
 ```
 
+`email` is also used to leave yourself out of reply-all recipients and to detect
+replies to your own sent messages. `organization` is accepted but not currently
+used (no `Organization:` header is added).
+
 ### [colors]
 
-Color scheme configuration. Colors support Rich color names and modifiers.
+Message list colors. Values are Rich styles: a color name (`blue`,
+`dark_orange`, `orange1`, ...), a hex color (`"#ff8c00"`), optionally with
+modifiers such as `italic` or `underline`. Rows are always drawn bold.
 
 ```toml
 [colors]
-# Color for unread messages (default: bold cyan)
-unread = "bold cyan"
+# Unread messages (default: "blue")
+unread = "blue"
 
-# Color for flagged/important messages (default: bold yellow)
-flagged = "bold yellow"
-
-# Header styling
-header = "bold"
-
-# Quoted text styling
-quoted = "italic dim"
+# Flagged messages; takes precedence over unread (default: "dark_orange")
+important = "dark_orange"
 ```
 
-Available color names: black, red, green, yellow, blue, magenta, cyan, white.
-Available modifiers: bold, dim, italic, underline, reverse.
+A value Rich cannot parse (e.g. `orange`; Rich's name is `orange1`) is replaced
+by the default, with a warning at startup.
+
+The options `marked`, `header` and `quoted` are also accepted but currently have
+no effect (marked messages are shown with `display.flag_marked` instead). Note
+the key is `important`, not `flagged`.
 
 ### [sync]
 
@@ -113,9 +131,15 @@ command = "mbsync -a"
 # offlineimap example
 # command = "offlineimap"
 
-# isync + mu index example
-# command = "mbsync -a && mu index"
+# Several commands need an explicit shell
+# command = "sh -c 'mbsync work && mbsync personal'"
 ```
+
+The command is split with shell-style quoting and run directly, **not through a
+shell**, so `&&`, pipes, redirection and `~`/variable expansion only work inside
+an explicit `sh -c '...'`. There is no need to run `mu index` yourself: after a
+successful sync Bor runs `mu index`, refreshes the message list and closes the
+Sync tab.
 
 ### [threading]
 
@@ -127,19 +151,18 @@ enabled = true
 indicator = "↳"
 ```
 
+`enabled` sets the initial state (toggle with `T`). `indicator` is accepted but
+currently unused: threads are drawn with `├`, `└` and `│` tree lines.
+
 ### [display]
 
 Message list display settings.
 
 ```toml
 [display]
-# Available columns: date, from, to, subject, flags, size, maildir
-columns = ["date", "from", "subject", "flags"]
-
-# Column widths (0 = fill remaining space)
+# Column widths
 date_width = 12
 from_width = 20
-subject_width = 0
 flags_width = 6
 
 # Flag symbols
@@ -153,23 +176,27 @@ flag_encrypted = "🔒"
 flag_signed = "✓"
 ```
 
+The column layout is fixed (flags, date, from, subject; the subject takes the
+remaining width). The options `columns` and `subject_width` are accepted but
+currently ignored, as are `flag_encrypted` and `flag_signed`, which are not
+shown in the flags column.
+
 ### [html]
 
 HTML email rendering settings.
 
 ```toml
 [html]
-# Renderer: html2text, rich, links, w3m
-renderer = "html2text"
-
-# Open links in browser when clicked
-open_links_in_browser = true
-
 # Directory for temporary HTML files created by "view in browser" (V key).
 # Defaults to the system temp directory when unset.
 # Useful when the system temp dir (/tmp) is restricted by browser security policies.
 # browser_tmp_dir = "~/tmp/bor"
 ```
+
+HTML-only messages are converted to text with `html2text` when it is installed
+(`pip install bormail[html]`), otherwise with a simple built-in tag stripper.
+The options `renderer` and `open_links_in_browser` are accepted but currently
+ignored.
 
 ### [attachments]
 
@@ -180,12 +207,15 @@ Attachment handling settings.
 # Default directory for saving attachments
 save_directory = "~/Downloads"
 
-# Use kitty icat for image preview (requires kitty terminal)
+# Preview images inline with the kitty graphics protocol (requires kitty)
 use_kitty_icat = true
 
 # Force kitty graphics support even when TERM is not xterm-kitty
 force_kitty_support = false
 ```
+
+Non-PNG images are converted for preview with Pillow (`pip install bormail[images]`)
+or, failing that, ImageMagick's `convert`.
 
 ### [aliases]
 
@@ -202,7 +232,8 @@ Your Name"""
 
 ### [email_aliases]
 
-Email address aliases for quick addressing. Works like `.mailrc` aliases.
+Email address aliases for quick addressing. Works like `.mailrc` aliases;
+`alias name address` lines from `~/.mailrc` are merged in and win on conflicts.
 
 ```toml
 [email_aliases]
@@ -246,7 +277,7 @@ Software Developer
 
 [colors]
 unread = "blue"
-important = "orange"
+important = "orange1"
 
 [sync]
 command = "mbsync -a"
@@ -262,8 +293,6 @@ flag_replied = "↩"
 flag_attachment = "📎"
 
 [html]
-renderer = "html2text"
-open_links_in_browser = true
 # browser_tmp_dir = "~/tmp/bor"
 
 [aliases]

@@ -8,24 +8,75 @@ Handles searching, viewing, moving, and managing email messages.
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import subprocess
 import threading
 from dataclasses import dataclass, field
-from datetime import datetime
-from email import policy, utils as email_utils
+from datetime import datetime, timedelta, timezone
+from email import policy
+from email import utils as email_utils
 from email.parser import BytesParser
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 from bor.ical import CalendarEvent, parse_calendar
+
+# mu numbers MIME parts depth-first starting at 1, skipping structural multipart
+# containers (mixed, alternative, related, ...) except these, which it lists as
+# extractable parts.
+_COUNTED_MULTIPART = {"multipart/signed", "multipart/encrypted"}
+
+# Headers captured for the full-header view (Ctrl+R in the message view).
+_EXTRA_HEADER_NAMES = [
+    "Return-Path",
+    "Sender",
+    "X-Mailer",
+    "User-Agent",
+    "X-Spam-Status",
+    "X-Spam-Score",
+    "Authentication-Results",
+    "X-Originating-IP",
+]
+
+
+def _timestamp_to_datetime(timestamp: float, tz: timezone | None) -> datetime | None:
+    """Convert a Unix timestamp to a datetime, or None if it is out of range."""
+    try:
+        return datetime.fromtimestamp(timestamp, tz=tz)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _decode_part_text(part: Any) -> str | None:
+    """Decode a MIME part's payload using its declared charset.
+
+    Falls back to UTF-8 for unknown charsets. Returns None when the part has
+    no byte payload.
+    """
+    payload = part.get_payload(decode=True)
+    if not payload or not isinstance(payload, bytes):
+        return None
+    charset = part.get_content_charset() or "utf-8"
+    try:
+        return payload.decode(charset, errors="replace")
+    except LookupError:
+        return payload.decode("utf-8", errors="replace")
+
+
+def _parse_address_header(value: str) -> list[EmailAddress]:
+    """Parse an address-list header; getaddresses handles quoted names with commas."""
+    return [
+        EmailAddress(name=name, email=email)
+        for name, email in email_utils.getaddresses([value])
+        if email
+    ]
 
 
 @dataclass
 class EmailAddress:
     """Represents an email address with optional name."""
+
     name: str = ""
     email: str = ""
 
@@ -47,7 +98,7 @@ class EmailAddress:
         return self.email
 
     @classmethod
-    def from_mu(cls, data: Union[Dict, List, str, None]) -> "EmailAddress":
+    def from_mu(cls, data: dict | list | str | None) -> EmailAddress:
         """
         Create EmailAddress from mu output format.
 
@@ -68,7 +119,7 @@ class EmailAddress:
                 if name.startswith('"') and name.endswith('"'):
                     name = name[1:-1]
                     # Unescape any escaped quotes or backslashes
-                    name = name.replace('\\"', '"').replace('\\\\', '\\')
+                    name = name.replace('\\"', '"').replace("\\\\", "\\")
                 return cls(name=name, email=match.group(2).strip())
             return cls(email=data)
         if isinstance(data, dict):
@@ -77,7 +128,7 @@ class EmailAddress:
             # Strip quotes from name if present
             if name and name.startswith('"') and name.endswith('"'):
                 name = name[1:-1]
-                name = name.replace('\\"', '"').replace('\\\\', '\\')
+                name = name.replace('\\"', '"').replace("\\\\", "\\")
             email = data.get(":email", data.get("email", data.get(":addr", data.get("addr", ""))))
             return cls(name=name, email=email)
         if isinstance(data, list) and len(data) >= 1:
@@ -88,30 +139,31 @@ class EmailAddress:
 @dataclass
 class EmailMessage:
     """Represents an email message with all metadata."""
+
     docid: int = 0
     msgid: str = ""
     path: str = ""
     maildir: str = ""
     subject: str = ""
-    date: Optional[datetime] = None
+    date: datetime | None = None
     size: int = 0
     from_addr: EmailAddress = field(default_factory=EmailAddress)
-    reply_to_addr: Optional[EmailAddress] = None  # Reply-To header if present
-    list_post_addr: Optional[EmailAddress] = None  # List-Post header (mailing list address)
-    to_addrs: List[EmailAddress] = field(default_factory=list)
-    cc_addrs: List[EmailAddress] = field(default_factory=list)
-    bcc_addrs: List[EmailAddress] = field(default_factory=list)
-    flags: List[str] = field(default_factory=list)
-    tags: List[str] = field(default_factory=list)
-    references: List[str] = field(default_factory=list)
+    reply_to_addr: EmailAddress | None = None  # Reply-To header if present
+    list_post_addr: EmailAddress | None = None  # List-Post header (mailing list address)
+    to_addrs: list[EmailAddress] = field(default_factory=list)
+    cc_addrs: list[EmailAddress] = field(default_factory=list)
+    bcc_addrs: list[EmailAddress] = field(default_factory=list)
+    flags: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    references: list[str] = field(default_factory=list)
     in_reply_to: str = ""
     priority: str = "normal"
     body_txt: str = ""
     body_html: str = ""
-    attachments: List[Dict[str, Any]] = field(default_factory=list)
+    attachments: list[dict[str, Any]] = field(default_factory=list)
     thread_level: int = 0  # For threading display
-    extra_headers: Dict[str, str] = field(default_factory=dict)  # Additional headers for full view
-    calendar_event: Optional["CalendarEvent"] = None  # Parsed text/calendar invite, if any
+    extra_headers: dict[str, str] = field(default_factory=dict)  # Additional headers for full view
+    calendar_event: CalendarEvent | None = None  # Parsed text/calendar invite, if any
 
     @property
     def is_unread(self) -> bool:
@@ -149,7 +201,7 @@ class EmailMessage:
         return "signed" in self.flags
 
     @classmethod
-    def from_mu_json(cls, data: Dict[str, Any]) -> "EmailMessage":
+    def from_mu_json(cls, data: dict[str, Any]) -> EmailMessage:
         """
         Create EmailMessage from mu JSON output.
 
@@ -159,6 +211,7 @@ class EmailMessage:
         Returns:
             EmailMessage instance
         """
+
         # Helper to get values - mu JSON uses colon-prefixed keys like :subject
         def get(key: str, default: Any = None) -> Any:
             # Try with colon prefix first (mu's sexp-style JSON)
@@ -176,29 +229,38 @@ class EmailMessage:
         msg.subject = get("subject", "(no subject)")
         msg.size = get("size", 0)
 
-        # Parse date - mu returns date as [high, low, usec] array
+        # mu 1.12.8+ provides an easy-to-use Unix timestamp, and mu 1.14.3+
+        # also provides the message's original UTC offset in seconds.
         date_val = get("date")
-        if date_val:
+        unix_date = get("date-unix")
+        utc_offset = get("utc-offset")
+        date_tz = None
+        if isinstance(utc_offset, int) and not isinstance(utc_offset, bool):
+            if abs(utc_offset) < 24 * 60 * 60:
+                date_tz = timezone(timedelta(seconds=utc_offset))
+
+        if isinstance(unix_date, (int, float)) and not isinstance(unix_date, bool):
+            msg.date = _timestamp_to_datetime(unix_date, date_tz)
+        elif date_val:
             if isinstance(date_val, list) and len(date_val) >= 2:
-                # mu returns [high, low, usec] where timestamp = high * 65536 + low
+                # Legacy mu JSON time: [high, low, usec], with
+                # timestamp = high * 65536 + low.
                 high, low = date_val[0], date_val[1]
-                timestamp = high * 65536 + low
-                msg.date = datetime.fromtimestamp(timestamp)
+                msg.date = _timestamp_to_datetime(high * 65536 + low, date_tz)
             elif isinstance(date_val, (int, float)):
-                msg.date = datetime.fromtimestamp(date_val)
+                msg.date = _timestamp_to_datetime(date_val, date_tz)
             elif isinstance(date_val, str):
                 try:
                     msg.date = datetime.fromisoformat(date_val)
+                    if msg.date.tzinfo is None and date_tz is not None:
+                        msg.date = msg.date.replace(tzinfo=date_tz)
                 except ValueError:
                     msg.date = None
 
-        # Parse addresses
+        # Parse addresses (from_mu takes the first entry of a list)
         from_data = get("from")
         if from_data:
-            if isinstance(from_data, list) and len(from_data) > 0:
-                msg.from_addr = EmailAddress.from_mu(from_data[0])
-            else:
-                msg.from_addr = EmailAddress.from_mu(from_data)
+            msg.from_addr = EmailAddress.from_mu(from_data)
 
         to_data = get("to", [])
         if isinstance(to_data, list):
@@ -236,22 +298,14 @@ class EmailMessage:
         # Parse Reply-To header (mu may return list, dict, or string)
         reply_to_data = get("reply-to", None)
         if reply_to_data:
-            if isinstance(reply_to_data, list) and reply_to_data:
-                msg.reply_to_addr = EmailAddress.from_mu(reply_to_data[0])
-            elif not isinstance(reply_to_data, list):
-                msg.reply_to_addr = EmailAddress.from_mu(reply_to_data)
+            msg.reply_to_addr = EmailAddress.from_mu(reply_to_data)
 
         # Parse List-Post header (mailing list address, takes priority over Reply-To for replies)
         list_post_data = get("list-post", None)
         if list_post_data:
-            if isinstance(list_post_data, list) and list_post_data:
-                addr = EmailAddress.from_mu(list_post_data[0])
-                if addr.email:
-                    msg.list_post_addr = addr
-            elif not isinstance(list_post_data, list):
-                addr = EmailAddress.from_mu(list_post_data)
-                if addr.email:
-                    msg.list_post_addr = addr
+            addr = EmailAddress.from_mu(list_post_data)
+            if addr.email:
+                msg.list_post_addr = addr
 
         # Priority
         msg.priority = get("priority", "normal")
@@ -270,7 +324,7 @@ class MuInterface:
     using the mu command-line tool.
     """
 
-    def __init__(self, mu_binary: Optional[str] = None, muhome: Optional[str] = None):
+    def __init__(self, mu_binary: str | None = None, muhome: str | None = None):
         """
         Initialize the mu interface.
 
@@ -280,21 +334,21 @@ class MuInterface:
         """
         self.mu_binary = mu_binary or shutil.which("mu") or "mu"
         self.muhome = muhome
-        self._root_maildir: Optional[str] = None
-        self._move_history: List[Tuple[str, str]] = []  # For undo
+        self._root_maildir: str | None = None
+        self._move_history: list[tuple[str, str]] = []  # For undo
 
         # Deferred database reindexing. Flag changes rename the file immediately
         # (cheap) and queue the `mu remove`/`mu add` pair for a background
         # thread, which batches all pending paths into one invocation each.
         # Without this, every message you open blocks the UI for ~100-130ms.
         self._reindex_lock = threading.Lock()
-        self._reindex_removals: List[str] = []
-        self._reindex_additions: List[str] = []
-        self._reindex_thread: Optional[threading.Thread] = None
+        self._reindex_removals: list[str] = []
+        self._reindex_additions: list[str] = []
+        self._reindex_thread: threading.Thread | None = None
         self._reindex_idle = threading.Event()
         self._reindex_idle.set()
 
-    def _run_mu(self, args: List[str], capture_output: bool = True) -> subprocess.CompletedProcess:
+    def _run_mu(self, args: list[str], capture_output: bool = True) -> subprocess.CompletedProcess:
         """
         Run mu command with given arguments.
 
@@ -314,12 +368,7 @@ class MuInterface:
         cmd.extend(args)
 
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=capture_output,
-                text=True,
-                timeout=60
-            )
+            result = subprocess.run(cmd, capture_output=capture_output, text=True, timeout=60)
             return result
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"mu command timed out: {' '.join(cmd)}")
@@ -336,32 +385,33 @@ class MuInterface:
         if self._root_maildir:
             return self._root_maildir
 
-        result = self._run_mu(["info"])
-        if result.returncode == 0:
-            for line in result.stdout.split("\n"):
-                # mu info output format: "| maildir           | /home/anze/mail                 |"
-                if "maildir" in line.lower() and "|" in line:
-                    parts = [p.strip() for p in line.split("|")]
-                    # parts will be ['', 'maildir', '/home/anze/mail', '']
-                    for i, part in enumerate(parts):
-                        if part.lower() == "maildir" and i + 1 < len(parts):
-                            self._root_maildir = parts[i + 1].strip()
-                            return self._root_maildir
+        # Recent mu versions report the root under `mu info store`; older
+        # versions included it in `mu info` itself.
+        for args in (["info", "store"], ["info"]):
+            result = self._run_mu(args)
+            if result.returncode != 0:
+                continue
+            for line in result.stdout.splitlines():
+                parts = [part.strip() for part in line.split("|")]
+                if len(parts) < 3 or parts[1].lower() not in {"root-maildir", "maildir"}:
+                    continue
+                root = Path(parts[2]).expanduser()
+                if root.is_absolute() and root.is_dir():
+                    self._root_maildir = str(root)
+                    return self._root_maildir
 
-        # Fallback to common location
-        self._root_maildir = str(Path.home() / "Maildir")
-        return self._root_maildir
+        raise RuntimeError("Could not determine the root maildir from mu info")
 
     def find(
         self,
         query: str,
-        maxnum: Optional[int] = None,
+        maxnum: int | None = None,
         threads: bool = False,
         sort_field: str = "date",
         descending: bool = True,
         skip_dups: bool = True,
-        include_related: bool = False
-    ) -> List[EmailMessage]:
+        include_related: bool = False,
+    ) -> list[EmailMessage]:
         """
         Search for messages matching query.
 
@@ -408,7 +458,7 @@ class MuInterface:
 
         messages = []
         stdout = result.stdout.strip()
-        
+
         # mu outputs JSON as an array, try parsing as array first
         try:
             data = json.loads(stdout)
@@ -422,8 +472,8 @@ class MuInterface:
             try:
                 for line in stdout.split("\n"):
                     line = line.strip()
-                    if line and line not in ('[', ']', ','):
-                        data = json.loads(line.rstrip(','))
+                    if line and line not in ("[", "]", ","):
+                        data = json.loads(line.rstrip(","))
                         messages.append(EmailMessage.from_mu_json(data))
             except json.JSONDecodeError:
                 pass
@@ -434,7 +484,7 @@ class MuInterface:
 
         return messages
 
-    def _compute_thread_levels(self, messages: List[EmailMessage]) -> None:
+    def _compute_thread_levels(self, messages: list[EmailMessage]) -> None:
         """
         Compute thread_level for each message based on references.
 
@@ -444,12 +494,12 @@ class MuInterface:
         treated as roots (level 0).
         """
         # Build msgid → position mapping (earlier index = earlier in thread order)
-        msgid_to_idx: Dict[str, int] = {}
+        msgid_to_idx: dict[str, int] = {}
         for idx, msg in enumerate(messages):
             if msg.msgid:
                 msgid_to_idx[msg.msgid] = idx
 
-        levels: List[int] = [0] * len(messages)
+        levels: list[int] = [0] * len(messages)
 
         for idx, msg in enumerate(messages):
             if not msg.references:
@@ -470,7 +520,7 @@ class MuInterface:
         for idx, msg in enumerate(messages):
             msg.thread_level = min(levels[idx], 10)
 
-    def find_by_msgid(self, msgid: str) -> Optional[EmailMessage]:
+    def find_by_msgid(self, msgid: str) -> EmailMessage | None:
         """
         Find a message by its Message-ID.
 
@@ -486,7 +536,7 @@ class MuInterface:
         results = self.find(query, maxnum=1)
         return results[0] if results else None
 
-    def find_thread(self, message: EmailMessage) -> List[EmailMessage]:
+    def find_thread(self, message: EmailMessage) -> list[EmailMessage]:
         """
         Find all messages in the thread containing the given message.
 
@@ -535,11 +585,11 @@ class MuInterface:
         # so  thread:X  finds messages whose first reference is X — exactly
         # the descendants whose short reference chains (one hop only) would
         # otherwise be missed by a pure msgid-based search.
-        MAX_PASSES = 5
+        max_passes = 5
         current_results = pass1
         current_ids = expanded_ids
 
-        for _ in range(MAX_PASSES):
+        for _ in range(max_passes):
             thread_parts = " OR ".join(f"thread:{mid}" for mid in current_ids if mid)
             msgid_parts = _msgid_query(current_ids)
             combined = f"({msgid_parts}) OR ({thread_parts})"
@@ -562,7 +612,7 @@ class MuInterface:
 
         return current_results
 
-    def view(self, path: str, mark_as_read: bool = True, msgid: str = "") -> Optional[EmailMessage]:
+    def view(self, path: str, mark_as_read: bool = True, msgid: str = "") -> EmailMessage | None:
         """
         View a message by path.
 
@@ -579,7 +629,7 @@ class MuInterface:
             current = self.find_by_msgid(msgid)
             if current:
                 path = current.path
-        
+
         if not Path(path).exists():
             return None
 
@@ -600,24 +650,15 @@ class MuInterface:
             # Parse To, CC, BCC
             to_header = email_msg.get("To", "")
             if to_header:
-                # Use email.utils.getaddresses to properly handle quoted names with commas
-                parsed_addrs = email_utils.getaddresses([to_header])
-                msg.to_addrs = [EmailAddress(name=name, email=email) 
-                               for name, email in parsed_addrs if email]
+                msg.to_addrs = _parse_address_header(to_header)
 
             cc_header = email_msg.get("CC", "")
             if cc_header:
-                # Use email.utils.getaddresses to properly handle quoted names with commas
-                parsed_addrs = email_utils.getaddresses([cc_header])
-                msg.cc_addrs = [EmailAddress(name=name, email=email) 
-                              for name, email in parsed_addrs if email]
+                msg.cc_addrs = _parse_address_header(cc_header)
 
             bcc_header = email_msg.get("BCC", "")
             if bcc_header:
-                # Use email.utils.getaddresses to properly handle quoted names with commas
-                parsed_addrs = email_utils.getaddresses([bcc_header])
-                msg.bcc_addrs = [EmailAddress(name=name, email=email) 
-                                for name, email in parsed_addrs if email]
+                msg.bcc_addrs = _parse_address_header(bcc_header)
 
             # Parse Reply-To (use getaddresses for consistent multi-address handling)
             reply_to_header = email_msg.get("Reply-To", "")
@@ -646,123 +687,14 @@ class MuInterface:
             # Parse date
             date_header = email_msg.get("Date")
             if date_header:
-                from email.utils import parsedate_to_datetime
                 try:
-                    msg.date = parsedate_to_datetime(date_header)
+                    msg.date = email_utils.parsedate_to_datetime(date_header)
                 except (ValueError, TypeError):
                     msg.date = None
 
-            # Get body content
-            msg.body_txt = ""
-            msg.body_html = ""
-            msg.attachments = []
-
-            if email_msg.is_multipart():
-                # Track MIME part index for mu extract --parts command.
-                # mu numbers parts in depth-first walk order starting at 1, but
-                # skips structural multipart containers (mixed, alternative, related…).
-                # Exception: multipart/signed and multipart/encrypted ARE counted
-                # because mu lists them as extractable parts.
-                _COUNTED_MULTIPART = {"multipart/signed", "multipart/encrypted"}
-                part_index = 0
-                for part in email_msg.walk():
-                    content_type = part.get_content_type()
-                    if content_type.startswith("multipart/") and content_type not in _COUNTED_MULTIPART:
-                        continue
-                    part_index += 1
-                    if content_type.startswith("multipart/"):
-                        # Counted but not extractable as an attachment.
-                        continue
-                    content_disposition = part.get("Content-Disposition", "")
-                    filename = part.get_filename()
-
-                    # Detect attachments:
-                    # 1. Explicit attachment disposition
-                    # 2. Inline images/media with a filename (common in HTML emails)
-                    # 3. Non-text parts with a filename
-                    is_attachment = "attachment" in content_disposition
-                    is_inline_media = (
-                        "inline" in content_disposition and
-                        filename and
-                        not content_type.startswith("text/")
-                    )
-                    # Also catch parts with filename that aren't text body parts
-                    has_filename_not_text = (
-                        filename and
-                        content_type not in ("text/plain", "text/html")
-                    )
-
-                    if is_attachment or is_inline_media or has_filename_not_text:
-                        msg.attachments.append({
-                            "filename": filename or "attachment",
-                            "content_type": content_type,
-                            "size": len(part.get_payload(decode=True) or b""),
-                            "part_index": part_index,  # MIME part number for mu extract
-                            "inline": "inline" in content_disposition
-                        })
-                    elif content_type == "text/plain":
-                        payload = part.get_payload(decode=True)
-                        if payload and isinstance(payload, bytes):
-                            charset = part.get_content_charset() or "utf-8"
-                            try:
-                                text = payload.decode(charset, errors="replace")
-                            except LookupError:
-                                text = payload.decode("utf-8", errors="replace")
-                            # Concatenate multiple text/plain parts (e.g., body + footer)
-                            if msg.body_txt:
-                                msg.body_txt += "\n" + text
-                            else:
-                                msg.body_txt = text
-                    elif content_type == "text/html":
-                        payload = part.get_payload(decode=True)
-                        if payload and isinstance(payload, bytes):
-                            charset = part.get_content_charset() or "utf-8"
-                            try:
-                                html = payload.decode(charset, errors="replace")
-                            except LookupError:
-                                html = payload.decode("utf-8", errors="replace")
-                            # Concatenate multiple text/html parts
-                            if msg.body_html:
-                                msg.body_html += html
-                            else:
-                                msg.body_html = html
-                    elif content_type == "text/calendar" and msg.calendar_event is None:
-                        payload = part.get_payload(decode=True)
-                        if payload and isinstance(payload, bytes):
-                            charset = part.get_content_charset() or "utf-8"
-                            try:
-                                cal_text = payload.decode(charset, errors="replace")
-                            except LookupError:
-                                cal_text = payload.decode("utf-8", errors="replace")
-                            msg.calendar_event = parse_calendar(cal_text)
-            else:
-                content_type = email_msg.get_content_type()
-                payload = email_msg.get_payload(decode=True)
-                if payload and isinstance(payload, bytes):
-                    charset = email_msg.get_content_charset() or "utf-8"
-                    try:
-                        text = payload.decode(charset, errors="replace")
-                    except LookupError:
-                        text = payload.decode("utf-8", errors="replace")
-
-                    if content_type == "text/html":
-                        msg.body_html = text
-                    elif content_type == "text/calendar":
-                        msg.calendar_event = parse_calendar(text)
-                    else:
-                        msg.body_txt = text
+            self._read_body_and_attachments(email_msg, msg)
 
             # Capture extra headers for full-header display
-            _EXTRA_HEADER_NAMES = [
-                "Return-Path",
-                "Sender",
-                "X-Mailer",
-                "User-Agent",
-                "X-Spam-Status",
-                "X-Spam-Score",
-                "Authentication-Results",
-                "X-Originating-IP",
-            ]
             for hdr_name in _EXTRA_HEADER_NAMES:
                 val = email_msg.get(hdr_name, "")
                 if val:
@@ -784,11 +716,85 @@ class MuInterface:
             print(f"Error parsing message: {e}")
             return None
 
+    @staticmethod
+    def _read_body_and_attachments(email_msg: Any, msg: EmailMessage) -> None:
+        """Fill msg's text/HTML bodies, calendar invite and attachment list."""
+        msg.body_txt = ""
+        msg.body_html = ""
+        msg.attachments = []
+
+        if not email_msg.is_multipart():
+            content_type = email_msg.get_content_type()
+            text = _decode_part_text(email_msg)
+            if text is not None:
+                if content_type == "text/html":
+                    msg.body_html = text
+                elif content_type == "text/calendar":
+                    msg.calendar_event = parse_calendar(text)
+                else:
+                    msg.body_txt = text
+            return
+
+        # Track the MIME part index for `mu extract --parts`, numbered the
+        # way mu does it (see _COUNTED_MULTIPART).
+        part_index = 0
+        for part in email_msg.walk():
+            content_type = part.get_content_type()
+            if content_type.startswith("multipart/") and content_type not in _COUNTED_MULTIPART:
+                continue
+            part_index += 1
+            if content_type.startswith("multipart/"):
+                # Counted but not extractable as an attachment.
+                continue
+            content_disposition = part.get("Content-Disposition", "")
+            filename = part.get_filename()
+
+            # Detect attachments:
+            # 1. Explicit attachment disposition
+            # 2. Inline images/media with a filename (common in HTML emails)
+            # 3. Non-text parts with a filename
+            is_attachment = "attachment" in content_disposition
+            is_inline_media = (
+                "inline" in content_disposition
+                and filename
+                and not content_type.startswith("text/")
+            )
+            # Also catch parts with filename that aren't text body parts
+            has_filename_not_text = filename and content_type not in ("text/plain", "text/html")
+
+            if is_attachment or is_inline_media or has_filename_not_text:
+                msg.attachments.append(
+                    {
+                        "filename": filename or "attachment",
+                        "content_type": content_type,
+                        "size": len(part.get_payload(decode=True) or b""),
+                        "part_index": part_index,  # MIME part number for mu extract
+                        "inline": "inline" in content_disposition,
+                    }
+                )
+            elif content_type == "text/plain":
+                text = _decode_part_text(part)
+                if text is not None:
+                    # Concatenate multiple text/plain parts (e.g., body + footer)
+                    if msg.body_txt:
+                        msg.body_txt += "\n" + text
+                    else:
+                        msg.body_txt = text
+            elif content_type == "text/html":
+                html = _decode_part_text(part)
+                if html is not None:
+                    # Concatenate multiple text/html parts
+                    msg.body_html += html
+            elif content_type == "text/calendar" and msg.calendar_event is None:
+                cal_text = _decode_part_text(part)
+                if cal_text is not None:
+                    msg.calendar_event = parse_calendar(cal_text)
+
     def _is_new_or_unread(self, path: str) -> bool:
         """Check if message path indicates new/unread status."""
         return "/new/" in path or (",S" not in path and "S" not in path.split(",")[-1])
 
-    def mark_read(self, path: str) -> Optional[str]:
+    def mark_read(self, path: str) -> str | None:
         """
         Mark a message as read.
 
@@ -800,7 +806,7 @@ class MuInterface:
         """
         return self._set_flag(path, "+S-N")
 
-    def mark_unread(self, path: str) -> Optional[str]:
+    def mark_unread(self, path: str) -> str | None:
         """
         Mark a message as unread.
 
@@ -812,7 +818,7 @@ class MuInterface:
         """
         return self._set_flag(path, "-S+N")
 
-    def mark_flagged(self, path: str, flagged: bool = True) -> Optional[str]:
+    def mark_flagged(self, path: str, flagged: bool = True) -> str | None:
         """
         Mark a message as flagged/important.
 
@@ -826,7 +832,7 @@ class MuInterface:
         flag_str = "+F" if flagged else "-F"
         return self._set_flag(path, flag_str)
 
-    def mark_replied(self, path: str) -> Optional[str]:
+    def mark_replied(self, path: str) -> str | None:
         """
         Mark a message as replied to.
 
@@ -838,7 +844,7 @@ class MuInterface:
         """
         return self._set_flag(path, "+R")
 
-    def mark_forwarded(self, path: str) -> Optional[str]:
+    def mark_forwarded(self, path: str) -> str | None:
         """
         Mark a message as forwarded.
 
@@ -850,7 +856,7 @@ class MuInterface:
         """
         return self._set_flag(path, "+P")
 
-    def _set_flag(self, path: str, flag_delta: str) -> Optional[str]:
+    def _set_flag(self, path: str, flag_delta: str) -> str | None:
         """
         Set flags on a message.
 
@@ -914,7 +920,7 @@ class MuInterface:
     # Deferred reindexing
     # ------------------------------------------------------------------
 
-    def queue_reindex(self, removed: Optional[str] = None, added: Optional[str] = None) -> None:
+    def queue_reindex(self, removed: str | None = None, added: str | None = None) -> None:
         """
         Queue a mu database update to run on a background thread.
 
@@ -980,7 +986,7 @@ class MuInterface:
         """
         return self._reindex_idle.wait(timeout)
 
-    def move(self, path: str, maildir: str) -> Optional[str]:
+    def move(self, path: str, maildir: str) -> str | None:
         """
         Move a message to a different maildir.
 
@@ -1007,17 +1013,16 @@ class MuInterface:
         new_path = target_dir / path_obj.name
 
         try:
-            # Store for undo
-            self._move_history.append((str(new_path), path))
-
             # Move the file first, then let the background worker tell mu.
             # Anything that queries mu afterwards waits via wait_for_reindex().
             shutil.move(str(path_obj), str(new_path))
-            self.queue_reindex(path, str(new_path))
-
-            return str(new_path)
         except OSError:
             return None
+
+        # Only a move that happened can be undone
+        self._move_history.append((str(new_path), path))
+        self.queue_reindex(path, str(new_path))
+        return str(new_path)
 
     def undo_move(self) -> bool:
         """
@@ -1041,9 +1046,13 @@ class MuInterface:
 
         try:
             shutil.move(str(current), str(original))
-            return True
         except OSError:
             return False
+
+        # Without this mu keeps the message at its moved-to location, so it
+        # would not reappear in the original folder until the next `mu index`.
+        self.queue_reindex(str(current), str(original))
+        return True
 
     def delete(self, path: str, permanent: bool = False) -> bool:
         """
@@ -1088,11 +1097,8 @@ class MuInterface:
         return result.returncode == 0
 
     def find_contacts(
-        self,
-        pattern: str = "",
-        personal: bool = False,
-        maxnum: Optional[int] = None
-    ) -> List[EmailAddress]:
+        self, pattern: str = "", personal: bool = False, maxnum: int | None = None
+    ) -> list[EmailAddress]:
         """
         Find contacts matching pattern.
 
@@ -1127,16 +1133,20 @@ class MuInterface:
             if isinstance(data, list):
                 for item in data:
                     if isinstance(item, dict):
-                        contacts.append(EmailAddress(
-                            name=item.get("name") or "",
-                            email=item.get("email") or item.get("addr") or ""
-                        ))
+                        contacts.append(
+                            EmailAddress(
+                                name=item.get("name") or "",
+                                email=item.get("email") or item.get("addr") or "",
+                            )
+                        )
             elif isinstance(data, dict):
                 # Single contact
-                contacts.append(EmailAddress(
-                    name=data.get("name") or "",
-                    email=data.get("email") or data.get("addr") or ""
-                ))
+                contacts.append(
+                    EmailAddress(
+                        name=data.get("name") or "",
+                        email=data.get("email") or data.get("addr") or "",
+                    )
+                )
         except json.JSONDecodeError:
             # Try newline-delimited JSON as fallback
             for line in result.stdout.strip().split("\n"):
@@ -1144,17 +1154,19 @@ class MuInterface:
                     try:
                         item = json.loads(line)
                         if isinstance(item, dict):
-                            contacts.append(EmailAddress(
-                                name=item.get("name") or "",
-                                email=item.get("email") or item.get("addr") or ""
-                            ))
+                            contacts.append(
+                                EmailAddress(
+                                    name=item.get("name") or "",
+                                    email=item.get("email") or item.get("addr") or "",
+                                )
+                            )
                     except json.JSONDecodeError:
                         # Try plain text parsing
                         contacts.append(EmailAddress.from_mu(line.strip()))
 
         return contacts
 
-    def get_maildirs(self) -> List[str]:
+    def get_maildirs(self) -> list[str]:
         """
         Get list of all maildirs.
 
@@ -1171,11 +1183,8 @@ class MuInterface:
         return sorted(maildirs)
 
     def extract_attachment(
-        self,
-        message_path: str,
-        attachment_index: int,
-        target_dir: str
-    ) -> Optional[str]:
+        self, message_path: str, attachment_index: int, target_dir: str
+    ) -> str | None:
         """
         Extract an attachment from a message.
 
@@ -1189,24 +1198,29 @@ class MuInterface:
         """
         target_path = Path(target_dir)
         target_path.mkdir(parents=True, exist_ok=True)
-        
+
         # Get list of files before extraction
         existing_files = set(f.name for f in target_path.iterdir() if f.is_file())
-        
-        args = ["extract", "--parts", str(attachment_index),
-                "--target-dir", str(target_path),
-                "--overwrite",
-                message_path]
+
+        args = [
+            "extract",
+            "--parts",
+            str(attachment_index),
+            "--target-dir",
+            str(target_path),
+            "--overwrite",
+            message_path,
+        ]
 
         result = self._run_mu(args)
         if result.returncode != 0:
             return None
-        
+
         # Find the extracted file - check for new files first
         for f in target_path.iterdir():
             if f.is_file() and f.name not in existing_files:
                 return str(f)
-        
+
         # If no new file, mu probably overwrote an existing file
         # Check mu output for the filename, or return any file that matches
         # the part pattern. Since we used --overwrite, the file exists.
@@ -1214,26 +1228,26 @@ class MuInterface:
         current_files = [f for f in target_path.iterdir() if f.is_file()]
         if len(current_files) == 1:
             return str(current_files[0])
-        
+
         # Multiple files exist - we need to figure out which one was just extracted
         # mu outputs the filename on stdout when extracting
         if result.stdout:
             # Parse mu output to find the extracted filename
             # mu typically outputs: "Wrote <path>"
-            for line in result.stdout.strip().split('\n'):
-                if line.startswith('Wrote '):
+            for line in result.stdout.strip().split("\n"):
+                if line.startswith("Wrote "):
                     extracted_path = line[6:].strip()
                     if Path(extracted_path).exists():
                         return extracted_path
-        
+
         # Last resort: return the most recently modified file
         if current_files:
             current_files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
             return str(current_files[0])
-        
+
         return None
 
-    def extract_all_attachments(self, message_path: str, target_dir: str) -> List[str]:
+    def extract_all_attachments(self, message_path: str, target_dir: str) -> list[str]:
         """
         Extract all attachments from a message.
 
@@ -1246,12 +1260,18 @@ class MuInterface:
         """
         target = Path(target_dir)
         target.mkdir(parents=True, exist_ok=True)
-        
+
         # Track file modification times before extraction
         existing_mtimes = {f: f.stat().st_mtime for f in target.iterdir() if f.is_file()}
-        
-        args = ["extract", "--save-attachments", "--overwrite", 
-                "--target-dir", str(target), message_path]
+
+        args = [
+            "extract",
+            "--save-attachments",
+            "--overwrite",
+            "--target-dir",
+            str(target),
+            message_path,
+        ]
         result = self._run_mu(args)
 
         if result.returncode != 0:

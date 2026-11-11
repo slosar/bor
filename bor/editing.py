@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
+from typing import Any
 
 try:
     import pyperclip
@@ -33,9 +32,34 @@ def kill_input_line(value: str, cursor_position: int) -> tuple[str, int, str]:
     return value[:cursor_position], cursor_position, killed_text
 
 
+def kill_input_to_end(widget: Any) -> None:
+    """Emacs-style Ctrl+K for a single-line Input: cut to the end of the line.
+
+    `widget` is anything with Input's `value` and `cursor_position`.
+    """
+    new_value, new_cursor, killed_text = kill_input_line(widget.value, widget.cursor_position)
+    copy_to_clipboard(killed_text)
+    widget.value = new_value
+    widget.cursor_position = new_cursor
+
+
+def normalize_newlines(text: str) -> str:
+    """Convert CRLF and CR line endings to LF.
+
+    Text on the wire is CRLF, but the editor works in LF; a stray CR lands
+    between the cursor and the newline and breaks line-based editing.
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def kill_text_line(text: str, cursor_index: int) -> tuple[str, int, str]:
     """Kill from the cursor to the end of the current line, emacs-style."""
     cursor_index = max(0, min(cursor_index, len(text)))
+
+    # A CR immediately before an LF is part of the line separator; kill both.
+    if text[cursor_index : cursor_index + 2] == "\r\n":
+        killed_text = "\r\n"
+        return text[:cursor_index] + text[cursor_index + 2 :], cursor_index, killed_text
 
     if cursor_index == len(text) and cursor_index > 0 and text[cursor_index - 1] == "\n":
         killed_text = "\n"

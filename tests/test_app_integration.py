@@ -252,8 +252,8 @@ class TestMessageView:
                     assert len(app._tabs) >= 0  # May or may not create tab depending on data
 
     @pytest.mark.asyncio
-    async def test_m_returns_to_index(self, mock_mu_interface, mock_config):
-        """Test that M returns to message index without closing tab."""
+    async def test_m_in_message_view_marks_and_keeps_tab(self, mock_mu_interface, mock_config):
+        """M in the message view marks the message in the index and keeps the tab open."""
         with patch('bor.app.get_config', return_value=mock_config):
             with patch('bor.app.MuInterface', return_value=mock_mu_interface):
                 from bor.app import BorApp
@@ -267,6 +267,9 @@ class TestMessageView:
                     await pilot.pause()
                     # Tab should still exist
                     assert len(app._tabs) == tab_count
+                    from bor.tabs.message_index import MessageIndexWidget
+
+                    assert 0 in app.query_one(MessageIndexWidget).marked_messages
 
     @pytest.mark.asyncio
     async def test_q_closes_tab(self, mock_mu_interface, mock_config):
@@ -511,7 +514,7 @@ class TestIndexRefreshOnReturn:
                     await pilot.press("c")
                     await pilot.pause()
 
-                    await pilot.press("ctrl+l", "x")
+                    await pilot.press("ctrl+l", "x", "y")
                     await pilot.pause()
 
                     assert mock_mu_interface.find.call_count > initial_find_calls
@@ -653,6 +656,407 @@ class TestComposeBulkAttachments:
 
 class TestQuit:
     """Test quit functionality."""
+
+    @pytest.mark.asyncio
+    async def test_reply_headers_use_bracketed_message_ids(self, mock_mu_interface, mock_config):
+        """Replies carry RFC 5322 <id> Message-IDs even though mu.view() strips the brackets."""
+        mock_mu_interface.view.return_value = MockEmailMessage(
+            msgid="parent@example.com", references=["<root@example.com>"]
+        )
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("r")
+                    await pilot.pause()
+                    msg = app.query_one(ComposeWidget)._build_message()
+
+        assert msg["In-Reply-To"] == "<parent@example.com>"
+        assert msg["References"] == "<root@example.com> <parent@example.com>"
+
+    @staticmethod
+    def _mailbox_mu(count=4):
+        """A mock mu whose find() reflects messages moved away by move()."""
+        store = create_mock_messages(count)
+        mu = MagicMock()
+        mu.find.side_effect = lambda *a, **k: list(store)
+        mu.find_contacts.return_value = []
+        mu.view.side_effect = lambda path, *a, **k: MockEmailMessage(
+            path=path, msgid=next(m.msgid for m in create_mock_messages(count) if m.path == path)
+        )
+
+        def move(path, folder):
+            store[:] = [m for m in store if m.path != path]
+            return f"{folder}/moved"
+
+        mu.move.side_effect = move
+        return mu
+
+    @pytest.mark.asyncio
+    async def test_archive_and_delete_in_message_view_advance(self, mock_config):
+        """X and D in the message view move the message and show the next one."""
+        from bor.tabs.message import MessageViewWidget
+
+        mu = self._mailbox_mu()
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mu):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    view = app.query_one(MessageViewWidget)
+
+                    await pilot.press("x", "y")
+                    await pilot.pause()
+                    await pilot.pause()
+                    assert mu.move.call_args_list[-1].args == ("/test/path/message0", "/Archive")
+                    assert view._message_ref.path == "/test/path/message1"
+                    # Once the index refresh lands, the shared cursor follows the view
+                    assert app._current_messages[app._current_index].path == "/test/path/message1"
+
+                    await pilot.press("d", "y")
+                    await pilot.pause()
+                    await pilot.pause()
+                    assert mu.move.call_args_list[-1].args == ("/test/path/message1", "/Trash")
+                    assert view._message_ref.path == "/test/path/message2"
+                    assert mu.move.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_archiving_last_message_in_view_closes_tab(self, mock_config):
+        """With no message after it, archiving from the view closes the tab."""
+        mu = self._mailbox_mu(2)
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mu):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("down", "enter")
+                    await pilot.pause()
+                    assert len(app._tabs) == 1
+                    await pilot.press("x", "y")
+                    await pilot.pause()
+                    await pilot.pause()
+                    assert mu.move.call_args_list[-1].args == ("/test/path/message1", "/Archive")
+                    assert len(app._tabs) == 0
+
+    @pytest.mark.asyncio
+    async def test_missing_attachment_stops_send_and_draft(
+        self, mock_mu_interface, mock_config, tmp_path
+    ):
+        """A vanished attachment is reported; the message is not sent without it."""
+        mock_mu_interface.get_root_maildir.return_value = str(tmp_path / "Mail")
+        sendmail = MagicMock()
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                with patch('bor.tabs.compose.smtplib.SMTP') as smtp:
+                    smtp.return_value.sendmail = sendmail
+                    from bor.app import BorApp
+
+                    app = BorApp()
+                    async with app.run_test() as pilot:
+                        await pilot.pause()
+                        await pilot.press("c")
+                        await pilot.pause()
+                        compose = app.query_one(ComposeWidget)
+                        compose.query_one("#to-input").value = "to@example.com"
+                        compose.attachments = [tmp_path / "gone.pdf"]
+                        with patch.object(ComposeWidget, "notify") as notify:
+                            assert await compose._send_message() is False
+                            assert compose._save_draft() is False
+
+        sendmail.assert_not_called()
+        assert not (tmp_path / "Mail").exists()
+        errors = [call.args[0] for call in notify.call_args_list]
+        assert any("gone.pdf" in error for error in errors)
+        assert len(errors) == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("keys", [("x", "n"), ("d", "escape"), ("a", "escape")])
+    async def test_declining_prompt_in_message_view_stays_in_view(self, mock_config, keys):
+        """Answering no to a prompt in the message view must not jump to the index."""
+        from textual.widgets import TabbedContent
+
+        from bor.tabs.message import MessageViewWidget
+
+        mu = self._mailbox_mu()
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mu):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    view = app.query_one(MessageViewWidget)
+                    focused_before = app.focused
+
+                    await pilot.press(*keys)
+                    await pilot.pause()
+
+                    assert app.query_one(TabbedContent).active == view.get_tab_id()
+                    assert app.focused is focused_before
+                    await pilot.press("n")
+                    await pilot.pause()
+                    assert view._message_ref.path == "/test/path/message1"
+                    mu.move.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cancel_compose_asks_for_confirmation(self, mock_mu_interface, mock_config):
+        """Ctrl+L X discards only after y; n keeps the message and its focus."""
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("c")
+                    await pilot.pause()
+                    await pilot.press(*"bob")
+                    await pilot.press("ctrl+l", "x")
+                    await pilot.pause()
+                    assert len(app._tabs) == 1
+
+                    await pilot.press("n")
+                    await pilot.pause()
+                    assert len(app._tabs) == 1
+                    assert app.focused.id == "to-input"
+                    assert app.focused.value == "bob"
+
+                    await pilot.press("ctrl+l", "x", "y")
+                    await pilot.pause()
+                    assert len(app._tabs) == 0
+
+    @staticmethod
+    def _draft_mu(tmp_path):
+        """Mock mu with one draft that is a reply and has an attachment."""
+        draft = MockEmailMessage(
+            path="/mail/Drafts/cur/draft:2,S",
+            maildir="/Drafts",
+            msgid="draft@example.com",
+            subject="Re: plans",
+            in_reply_to="<parent@example.com>",
+            references=["<root@example.com>", "<parent@example.com>"],
+            attachments=[{"filename": "plan.pdf", "part_index": 2, "content_type": "application/pdf"}],
+        )
+        mu = MagicMock()
+        mu.find.return_value = [draft]
+        mu.find_contacts.return_value = []
+        mu.view.return_value = draft
+        mu.get_root_maildir.return_value = str(tmp_path / "Mail")
+
+        def extract(message_path, part_index, target_dir):
+            out = Path(target_dir) / "plan.pdf"
+            out.write_bytes(b"%PDF")
+            return str(out)
+
+        mu.extract_attachment.side_effect = extract
+        return mu, draft
+
+    @pytest.mark.asyncio
+    async def test_editing_draft_keeps_original_until_saved(self, mock_config, tmp_path):
+        """Opening or cancelling a draft edit keeps the draft; saving replaces it."""
+        mu, draft = self._draft_mu(tmp_path)
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mu):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("e")
+                    await pilot.pause()
+                    mu.move.assert_not_called()
+
+                    await pilot.press("ctrl+l", "x", "y")
+                    await pilot.pause()
+                    mu.move.assert_not_called()
+
+                    await pilot.press("e")
+                    await pilot.pause()
+                    await pilot.press("ctrl+l", "d")
+                    await pilot.pause()
+
+        mu.move.assert_called_once_with(draft.path, "/Trash")
+        saved = list((tmp_path / "Mail" / "Drafts" / "cur").iterdir())
+        assert len(saved) == 1
+
+    async def _send_edited_draft(self, mu, mock_config):
+        """Open the mock draft with E, send it with Ctrl+L L; return (app, notify mock)."""
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mu):
+                with patch('bor.tabs.compose.smtplib.SMTP'):
+                    with patch.object(ComposeWidget, "notify") as notify:
+                        from bor.app import BorApp
+
+                        app = BorApp()
+                        async with app.run_test() as pilot:
+                            await pilot.pause()
+                            await pilot.press("e")
+                            await pilot.pause()
+                            await app.workers.wait_for_complete()
+                            app.query_one("#to-input").value = "to@example.com"
+                            await pilot.press("ctrl+l", "l")
+                            for _ in range(50):
+                                if not app._tabs:
+                                    break
+                                await pilot.pause(0.02)
+                            return app, notify
+
+    @pytest.mark.asyncio
+    async def test_sending_edited_reply_draft_marks_parent_replied(self, mock_config, tmp_path):
+        import threading
+
+        mu, draft = self._draft_mu(tmp_path)
+        parent = MockEmailMessage(path="/mail/INBOX/cur/parent:2,S", msgid="parent@example.com")
+        lookup_threads = []
+
+        def find_by_msgid(msgid):
+            lookup_threads.append(threading.current_thread() is threading.main_thread())
+            return parent
+
+        mu.find_by_msgid.side_effect = find_by_msgid
+
+        app, notify = await self._send_edited_draft(mu, mock_config)
+
+        assert len(app._tabs) == 0
+        mu.find_by_msgid.assert_called_once_with("<parent@example.com>")
+        assert lookup_threads == [False]
+        mu.mark_replied.assert_called_once_with(parent.path)
+        mu.move.assert_called_once_with(draft.path, "/Trash")
+
+    @pytest.mark.asyncio
+    async def test_failed_parent_lookup_still_completes_send(self, mock_config, tmp_path):
+        """The mail is already out; a mu error while flagging the parent is not a send error."""
+        mu, draft = self._draft_mu(tmp_path)
+        mu.find_by_msgid.side_effect = RuntimeError("mu command timed out")
+
+        app, notify = await self._send_edited_draft(mu, mock_config)
+
+        assert len(app._tabs) == 0
+        mu.mark_replied.assert_not_called()
+        assert "Message sent!" in [call.args[0] for call in notify.call_args_list]
+
+    @pytest.mark.asyncio
+    async def test_sending_edited_non_reply_draft_does_not_look_up_parent(
+        self, mock_config, tmp_path
+    ):
+        mu, draft = self._draft_mu(tmp_path)
+        draft.in_reply_to = ""
+        draft.references = []
+
+        app, notify = await self._send_edited_draft(mu, mock_config)
+
+        assert len(app._tabs) == 0
+        mu.find_by_msgid.assert_not_called()
+        mu.mark_replied.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_editing_draft_keeps_attachments_and_threading(self, mock_config, tmp_path):
+        mu, draft = self._draft_mu(tmp_path)
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mu):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("e")
+                    await pilot.pause()
+                    compose = app.query_one(ComposeWidget)
+                    assert [path.name for path in compose.attachments] == ["plan.pdf"]
+                    msg = compose._build_message()
+
+        assert msg["In-Reply-To"] == "<parent@example.com>"
+        assert msg["References"] == "<root@example.com> <parent@example.com>"
+
+    @pytest.mark.asyncio
+    async def test_thread_view_clears_marks_and_survives_return(self, mock_mu_interface, mock_config):
+        """Ctrl+T drops marks (row numbers of the old list) and stays after a message tab."""
+        from bor.tabs.message_index import MessageIndexWidget
+
+        messages = mock_mu_interface.find.return_value
+        thread = [messages[3], messages[1], messages[4]]
+        mock_mu_interface.find_thread.return_value = thread
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    index = app.query_one(MessageIndexWidget)
+                    await pilot.press("m")  # marks row 0, cursor to row 1
+                    assert index.marked_messages == {0}
+
+                    await pilot.press("ctrl+t")
+                    await pilot.pause()
+                    assert index.marked_messages == set()
+                    assert [m.path for m in index.messages] == [m.path for m in thread]
+                    # Cursor stays on the message the thread was opened from
+                    assert app.query_one(DataTable).cursor_row == 1
+
+                    await pilot.press("enter")
+                    await pilot.pause()
+                    await pilot.press("q")
+                    await pilot.pause()
+                    await pilot.pause()
+                    assert [m.path for m in index.messages] == [m.path for m in thread]
+
+                    await pilot.press("i")
+                    await pilot.pause()
+                    assert len(index.messages) == len(messages)
+
+    @pytest.mark.asyncio
+    async def test_tab_cycles_within_compose_fields(self, mock_mu_interface, mock_config):
+        """Tab in the body wraps to To and Shift+Tab in To wraps to the body."""
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    await pilot.press("c")
+                    await pilot.pause()
+                    await pilot.press("ctrl+l", "e")
+                    await pilot.press(*"hi ")
+                    body_text = app.query_one("#body-input").text
+
+                    await pilot.press("tab")
+                    await pilot.pause()
+                    assert app.focused.id == "to-input"
+                    assert app.query_one("#body-input").text == body_text
+
+                    await pilot.press("shift+tab")
+                    await pilot.pause()
+                    assert app.focused.id == "body-input"
+
+    @pytest.mark.asyncio
+    async def test_home_and_end_move_to_first_and_last_message(self, mock_mu_interface, mock_config):
+        with patch('bor.app.get_config', return_value=mock_config):
+            with patch('bor.app.MuInterface', return_value=mock_mu_interface):
+                from bor.app import BorApp
+
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+                    table = app.query_one(DataTable)
+                    await pilot.press("end")
+                    await pilot.pause()
+                    assert table.cursor_row == 4
+                    await pilot.press("home")
+                    await pilot.pause()
+                    assert table.cursor_row == 0
 
     @pytest.mark.asyncio
     async def test_ctrl_q_quits(self, mock_mu_interface, mock_config):

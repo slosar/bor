@@ -1,12 +1,15 @@
+import email.utils
+from email.mime.multipart import MIMEMultipart
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, PropertyMock
 
 import pytest
 
 import bor.tabs.compose as compose_module
-from bor.editing import kill_input_line, kill_text_line
-from bor.mu import EmailMessage, EmailAddress
-from bor.tabs.compose import ComposeWidget, AddressInput, ComposeTextArea, FilePathInput
-import email.utils
+from bor.editing import kill_input_line, kill_text_line, normalize_newlines
+from bor.mu import EmailAddress, EmailMessage
+from bor.tabs.compose import AddressInput, ComposeTextArea, ComposeWidget, FilePathInput
 
 
 def test_compose_references_appends_parent_msgid() -> None:
@@ -34,6 +37,30 @@ def test_compose_references_deduplicates_ids() -> None:
     references = ComposeWidget._compose_references(parent)
 
     assert references == "<parent@id> <root@id>"
+
+
+def test_compose_references_brackets_bare_message_ids() -> None:
+    """mu.view() strips <> from Message-IDs; References must restore them."""
+    parent = EmailMessage(msgid="parent@id", references=["<root@id>", "mid@id"])
+
+    references = ComposeWidget._compose_references(parent)
+
+    assert references == "<root@id> <mid@id> <parent@id>"
+
+
+def test_compose_references_splits_unspaced_ids_and_dedupes() -> None:
+    """Message-IDs may be run together; bare and bracketed forms are the same ID."""
+    parent = EmailMessage(msgid="parent@id", references=["<root@id><parent@id>"])
+
+    references = ComposeWidget._compose_references(parent)
+
+    assert references == "<root@id> <parent@id>"
+
+
+def test_bracketed_msgids() -> None:
+    assert compose_module._bracketed_msgids("a@x") == ["<a@x>"]
+    assert compose_module._bracketed_msgids(" <a@x> ") == ["<a@x>"]
+    assert compose_module._bracketed_msgids("") == []
 
 
 def test_compose_widget_does_not_bind_ctrl_a_to_attach() -> None:
@@ -342,6 +369,24 @@ def test_reply_all_to_sent_message_keeps_original_to_out_of_cc() -> None:
     assert cc_addrs == ["Carol <carol@example.com>"]
 
 
+def test_save_to_folder_queues_message_for_reindexing(tmp_path: Path, monkeypatch) -> None:
+    """A saved message must be searchable without a manual full mu index."""
+    mu = Mock()
+    mu.get_root_maildir.return_value = str(tmp_path)
+    app = SimpleNamespace(mu=mu)
+    monkeypatch.setattr(ComposeWidget, "bor_app", PropertyMock(return_value=app))
+    widget = ComposeWidget()
+    message = MIMEMultipart()
+    message["Subject"] = "Recently sent"
+
+    assert widget._save_to_folder("/Archive", message)
+
+    mu.queue_reindex.assert_called_once()
+    saved_path = Path(mu.queue_reindex.call_args.kwargs["added"])
+    assert saved_path.parent == tmp_path / "Archive" / "cur"
+    assert "Subject: Recently sent" in saved_path.read_text(encoding="utf-8")
+
+
 def test_forward_attachments_keep_duplicate_names(tmp_path: Path) -> None:
     """Forwarding should keep all attachments with duplicate filenames."""
     attachments = [
@@ -467,6 +512,56 @@ def test_kill_text_line_kills_trailing_empty_line() -> None:
     assert killed == "\n"
 
 
+def test_kill_text_line_kills_crlf_separator_at_end_of_line() -> None:
+    """Ctrl+K at end of a CRLF line should kill the whole \\r\\n, not just the CR."""
+    text, cursor, killed = kill_text_line("alpha\r\nbeta", 5)
+    assert text == "alphabeta"
+    assert cursor == 5
+    assert killed == "\r\n"
+
+
+def test_kill_text_line_kills_crlf_empty_line() -> None:
+    """Ctrl+K on an empty CRLF line should delete that line in one press."""
+    text, cursor, killed = kill_text_line("alpha\r\n\r\nbeta", 7)
+    assert text == "alpha\r\nbeta"
+    assert cursor == 7
+    assert killed == "\r\n"
+
+
+def test_normalize_newlines_converts_crlf_and_cr() -> None:
+    """Wire-format CRLF and lone CR line endings should become plain LF."""
+    assert normalize_newlines("a\r\nb\rc\nd") == "a\nb\nc\nd"
+
+
+def test_compose_kill_line_handles_crlf_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Repeated Ctrl+K in CRLF editor text should behave like LF text."""
+    monkeypatch.setattr(compose_module, "copy_to_clipboard", lambda *a, **k: None)
+
+    editor = ComposeTextArea()
+    editor.text = "alpha\r\nbeta\r\n"
+    editor.cursor_location = (0, 0)
+
+    editor._kill_line_at_cursor()
+    editor._kill_line_at_cursor()
+    editor._kill_line_at_cursor()
+    editor._kill_line_at_cursor()
+
+    assert editor.text == ""
+
+
+def test_compose_kill_line_at_end_of_crlf_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ctrl+K at the end of a CRLF line should join lines in one press."""
+    monkeypatch.setattr(compose_module, "copy_to_clipboard", lambda *a, **k: None)
+
+    editor = ComposeTextArea()
+    editor.text = "alpha\r\nbeta"
+    editor.cursor_location = (0, 5)
+
+    editor._kill_line_at_cursor()
+
+    assert editor.text == "alphabeta"
+
+
 def test_compose_kill_line_appends_consecutive_kills_to_clipboard(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -531,6 +626,19 @@ def test_file_path_completion_extends_to_shared_prefix() -> None:
     assert completed == "/tmp/alp"
 
 
+def test_file_path_completion_extends_case_insensitive_shared_prefix() -> None:
+    """Tab should extend to the shared prefix even when match casing differs."""
+    completed = FilePathInput._longest_shared_completion_prefix(
+        "/home/anze/Downloads/LN_Up",
+        [
+            "/home/anze/Downloads/LN_Updates_260813.pdf",
+            "/home/anze/Downloads/LN_Updates_Oct26.pdf",
+            "/home/anze/Downloads/LN_updates_260612.pdf",
+        ],
+    )
+    assert completed == "/home/anze/Downloads/LN_Updates_"
+
+
 def test_file_path_completion_keeps_input_when_matches_diverge() -> None:
     """Tab should leave the input unchanged when matches share no extra prefix."""
     completed = FilePathInput._longest_shared_completion_prefix(
@@ -538,3 +646,83 @@ def test_file_path_completion_keeps_input_when_matches_diverge() -> None:
         ["/tmp/alpha.txt", "/tmp/archive.txt"],
     )
     assert completed == "/tmp/a"
+
+
+async def test_send_keeps_bcc_out_of_transmitted_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bcc recipients get the mail, but no recipient sees the Bcc header."""
+    from email.mime.text import MIMEText
+
+    msg = MIMEMultipart("alternative")
+    msg["From"] = "me@example.com"
+    msg["To"] = "to@example.com"
+    msg["BCC"] = "Secret <secret@example.com>"
+    msg["Subject"] = "hi"
+    msg.attach(MIMEText("body", "plain", "utf-8"))
+
+    sent: dict = {}
+
+    class FakeSMTP:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def starttls(self) -> None:
+            pass
+
+        def login(self, *args) -> None:
+            pass
+
+        def sendmail(self, from_addr, to_addrs, data) -> None:
+            sent.update(from_addr=from_addr, to_addrs=to_addrs, data=data)
+
+        def quit(self) -> None:
+            pass
+
+    widget = ComposeWidget()
+    saved: list[str] = []
+    monkeypatch.setattr(widget, "_build_message", lambda: msg)
+    monkeypatch.setattr(
+        widget, "_save_to_folder", lambda folder, m=None: saved.append(m.as_string()) or True
+    )
+    monkeypatch.setattr(compose_module.smtplib, "SMTP", FakeSMTP)
+
+    assert await widget._send_message()
+
+    transmitted_headers = sent["data"].split("\n\n", 1)[0]
+    assert "secret@example.com" not in transmitted_headers
+    assert sent["to_addrs"] == ["to@example.com", "secret@example.com"]
+    # The sent-folder copy keeps the Bcc header as a record
+    assert "BCC: Secret <secret@example.com>" in saved[0]
+
+
+@pytest.mark.parametrize(
+    ("name", "content_type"),
+    [
+        ("My Report.pdf", "application/pdf"),
+        ("Čestitka; final.txt", "text/plain"),
+        ("archive.tar.gz", "application/octet-stream"),
+        ("no-extension", "application/octet-stream"),
+    ],
+)
+def test_attachment_part_round_trips_filename_and_type(
+    tmp_path: Path, name: str, content_type: str
+) -> None:
+    """Names with spaces, semicolons or non-ASCII survive; the type is guessed."""
+    from email import policy
+    from email.parser import BytesParser
+
+    path = tmp_path / name
+    path.write_bytes(b"data")
+    msg = MIMEMultipart("mixed")
+    msg.attach(ComposeWidget._attachment_part(path))
+
+    parsed = BytesParser(policy=policy.default).parsebytes(msg.as_bytes())
+    part = next(parsed.iter_attachments())
+
+    assert part.get_filename() == name
+    assert part.get_content_type() == content_type
+    assert part.get_content() == b"data" or part.get_content() == "data"
+
+
+def test_unreadable_attachment_raises(tmp_path: Path) -> None:
+    with pytest.raises(OSError, match="Cannot read attachment .*gone.pdf"):
+        ComposeWidget._attachment_part(tmp_path / "gone.pdf")

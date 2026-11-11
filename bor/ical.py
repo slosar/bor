@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Optional, Tuple, Union
 
 
 @dataclass
@@ -28,13 +27,13 @@ class CalendarEvent:
     organizer: str = ""  # display name, falling back to email
     organizer_email: str = ""
     status: str = ""  # CONFIRMED, TENTATIVE, CANCELLED
-    start: Optional[Union[datetime, date]] = None
-    end: Optional[Union[datetime, date]] = None
+    start: datetime | date | None = None
+    end: datetime | date | None = None
     all_day: bool = False
     recurrence: str = ""  # human-readable RRULE summary, if any
 
 
-def _coerce_dt(value: object) -> Tuple[Optional[Union[datetime, date]], bool]:
+def _coerce_dt(value: object) -> tuple[datetime | date | None, bool]:
     """Return (datetime-or-date, all_day) for an icalendar DTSTART/DTEND value."""
     if isinstance(value, datetime):
         return value, False
@@ -70,7 +69,7 @@ def _describe_rrule(rrule: object) -> str:
         return "Recurring"
 
 
-def parse_calendar(ical_text: str) -> Optional[CalendarEvent]:
+def parse_calendar(ical_text: str) -> CalendarEvent | None:
     """
     Parse a text/calendar payload into a CalendarEvent.
 

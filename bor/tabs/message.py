@@ -12,26 +12,24 @@ import html
 import re
 import tempfile
 import webbrowser
-from datetime import date, datetime
+from collections.abc import Callable
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Callable, Optional, Union
 
 from rich.text import Text
-
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Vertical, ScrollableContainer
-from textual.widgets import Static, Label, Markdown
+from textual.containers import ScrollableContainer
 from textual.reactive import reactive
+from textual.widgets import Static
 
-from bor.tabs.base import BaseTab
-from bor.ical import CalendarEvent
-from bor.mu import EmailMessage, MuInterface
 from bor.config import get_config
+from bor.ical import CalendarEvent
+from bor.mu import EmailMessage
+from bor.tabs.base import BaseTab
 
-
-_URL_RE = re.compile(r'(https?://\S+)')
+_URL_RE = re.compile(r"(https?://\S+)")
 
 
 def _make_body_text(content: str) -> Text:
@@ -48,8 +46,8 @@ def _make_body_text(content: str) -> Text:
         if not part:
             continue
         if i % 2 == 1:  # URL
-            url = part.rstrip('.,;:!?)]>')
-            trailing = part[len(url):]
+            url = part.rstrip(".,;:!?)]>")
+            trailing = part[len(url) :]
             # If the prior chunk ends with `[` (style: `[https://...]`), pull
             # the bracket into the link span so it's part of the clickable
             # affordance, matching the prior behavior.
@@ -79,6 +77,7 @@ def html_to_text(html: str) -> str:
     """
     try:
         import html2text
+
         h = html2text.HTML2Text()
         h.ignore_links = False
         h.ignore_images = True
@@ -89,20 +88,20 @@ def html_to_text(html: str) -> str:
 
     # Simple fallback: strip HTML tags
     # Remove style/script/head blocks to avoid dumping CSS/JS
-    text = re.sub(r'(?is)<(script|style)\b[^>]*>.*?</\1>', '', html)
-    text = re.sub(r'(?is)<head\b[^>]*>.*?</head>', '', text)
-    text = re.sub(r'(?is)<!--.*?-->', '', text)
+    text = re.sub(r"(?is)<(script|style)\b[^>]*>.*?</\1>", "", html)
+    text = re.sub(r"(?is)<head\b[^>]*>.*?</head>", "", text)
+    text = re.sub(r"(?is)<!--.*?-->", "", text)
 
-    text = re.sub(r'<br\s*/?>', '\n', text, flags=re.I)
-    text = re.sub(r'<p[^>]*>', '\n\n', text, flags=re.I)
-    text = re.sub(r'</p>', '', text, flags=re.I)
-    text = re.sub(r'<[^>]+>', '', text)
-    text = re.sub(r'&nbsp;', ' ', text)
-    text = re.sub(r'&lt;', '<', text)
-    text = re.sub(r'&gt;', '>', text)
-    text = re.sub(r'&amp;', '&', text)
-    text = re.sub(r'&quot;', '"', text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(r"<p[^>]*>", "\n\n", text, flags=re.I)
+    text = re.sub(r"</p>", "", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"&nbsp;", " ", text)
+    text = re.sub(r"&lt;", "<", text)
+    text = re.sub(r"&gt;", ">", text)
+    text = re.sub(r"&amp;", "&", text)
+    text = re.sub(r"&quot;", '"', text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
 
@@ -115,7 +114,7 @@ _METHOD_TITLES = {
 }
 
 
-def _cal_day(d: Union[datetime, date]) -> str:
+def _cal_day(d: datetime | date) -> str:
     """Format the date portion, e.g. 'Wednesday, June 24, 2026' (no leading zero)."""
     return d.strftime("%A, %B ") + str(d.day) + d.strftime(", %Y")
 
@@ -158,7 +157,6 @@ def _cal_when_lines(ev: CalendarEvent) -> list[str]:
         # All-day DTEND is exclusive; subtract a day so a 1-day event reads as
         # a single date rather than spanning into the next morning.
         if end is not None and (end - start).days > 1:
-            from datetime import timedelta
             last = end - timedelta(days=1)
             return [f"{_cal_day(start)}  →  {_cal_day(last)}  (all day)"]
         return [f"{_cal_day(start)}  (all day)"]
@@ -178,7 +176,7 @@ def _cal_when_lines(ev: CalendarEvent) -> list[str]:
     return [f"{_cal_day(start)} · {_cal_clock(start)}{tz_suffix}"]
 
 
-def _cal_local_line(ev: CalendarEvent) -> Optional[str]:
+def _cal_local_line(ev: CalendarEvent) -> str | None:
     """Return a 'your local time' line if it differs from the invite's timezone."""
     start = ev.start
     if ev.all_day or not isinstance(start, datetime) or start.tzinfo is None:
@@ -318,8 +316,10 @@ class MessageHeader(Static):
         if self.message.list_post_addr and self.message.list_post_addr.email:
             if self.message.list_post_addr.email != self.message.from_addr.email:
                 add_row("List:    ", self.message.list_post_addr.email)
-        elif (self.message.reply_to_addr and
-                self.message.reply_to_addr.email != self.message.from_addr.email):
+        elif (
+            self.message.reply_to_addr
+            and self.message.reply_to_addr.email != self.message.from_addr.email
+        ):
             add_row("Reply-To: ", str(self.message.reply_to_addr))
 
         add_row("To:      ", ", ".join(str(addr) for addr in self.message.to_addrs))
@@ -385,39 +385,6 @@ class MessageHeader(Static):
         return text
 
 
-class MessageBody(ScrollableContainer):
-    """Widget to display message body."""
-
-    can_focus = True
-
-    DEFAULT_CSS = """
-    MessageBody {
-        height: 1fr;
-        padding: 1;
-    }
-
-    MessageBody .quoted {
-        color: $text-muted;
-        text-style: italic;
-    }
-    """
-
-    def __init__(self, content: str, **kwargs) -> None:
-        """
-        Initialize message body display.
-
-        Args:
-            content: Message body text
-        """
-        super().__init__(**kwargs)
-        self.content = content
-
-    def compose(self) -> ComposeResult:
-        """Create the body layout."""
-        # Try to use Markdown for rich display
-        yield Static(self.content)
-
-
 class UrlPickerBar(Static):
     """URL selection bar widget for choosing a link to open."""
 
@@ -441,7 +408,7 @@ class UrlPickerBar(Static):
         """Initialize URL picker bar."""
         super().__init__(*args, **kwargs)
         self._urls: list[str] = []
-        self._callback: Optional[Callable[[str], None]] = None
+        self._callback: Callable[[str], None] | None = None
         self._error: str = ""
 
     def ask(self, urls: list[str], callback: Callable[[str], None]) -> None:
@@ -462,7 +429,8 @@ class UrlPickerBar(Static):
             lines.append(f"(+{len(self._urls) - 9} more)")
         if self._error:
             lines.append(self._error)
-        self.update("\n".join(lines))
+        # URLs may contain brackets; never parse them as markup
+        self.update(Text("\n".join(lines)))
 
     def on_key(self, event: events.Key) -> None:
         """Handle key events for URL selection."""
@@ -513,7 +481,6 @@ class MessageViewWidget(BaseTab):
         Binding("space", "page_down", "Page Down", show=False),
         Binding("home", "scroll_home", "Top", show=False),
         Binding("end", "scroll_end", "Bottom", show=False),
-
         # Actions - < returns without closing, Q closes and returns (< handled in on_key)
         Binding("q", "close_and_return", "Close"),
         # M, X, D, A work as in Message Index
@@ -574,19 +541,20 @@ class MessageViewWidget(BaseTab):
         """
         super().__init__(*args, **kwargs)
         self._message_ref = message
-        self._full_message: Optional[EmailMessage] = None
+        self._full_message: EmailMessage | None = None
         self._content: str = ""
         # Track all message indices that were viewed/read during this session
         self._read_message_indices: set = set()
 
     @property
-    def message(self) -> Optional[EmailMessage]:
+    def message(self) -> EmailMessage | None:
         """Get the full message."""
         return self._full_message
 
     def compose(self) -> ComposeResult:
         """Create the widget layout."""
         from bor.tabs.message_index import ConfirmBar, FlagBar, ReplyBar
+
         with ScrollableContainer():
             yield MessageHeader(self._message_ref, id="msg-header")
             yield Static("", id="calendar-info", classes="calendar-info")
@@ -644,7 +612,7 @@ class MessageViewWidget(BaseTab):
 
         self._apply_message(ref, full_message, content, body_text)
 
-    def _read_message(self, ref: EmailMessage) -> tuple[Optional[EmailMessage], str, Optional[Text]]:
+    def _read_message(self, ref: EmailMessage) -> tuple[EmailMessage | None, str, Text | None]:
         """Do the expensive part of loading a message. Runs on a worker thread.
 
         Everything here is CPU/IO bound and touches no widgets: MIME parsing,
@@ -672,9 +640,9 @@ class MessageViewWidget(BaseTab):
     def _apply_message(
         self,
         ref: EmailMessage,
-        full_message: Optional[EmailMessage],
+        full_message: EmailMessage | None,
         content: str,
-        body_text: Optional[Text],
+        body_text: Text | None,
     ) -> None:
         """Render a loaded message. Runs on the UI thread."""
         self._full_message = full_message
@@ -771,8 +739,10 @@ class MessageViewWidget(BaseTab):
     def _refresh_index_row(self) -> None:
         """Refresh all read messages' rows in the index to show updated read status."""
         try:
-            from bor.tabs.message_index import MessageIndexWidget
             from textual.widgets import DataTable
+
+            from bor.tabs.message_index import MessageIndexWidget
+
             index_widget = self.bor_app.query_one(MessageIndexWidget)
             # Refresh all messages that were read during this viewing session
             for idx in self._read_message_indices:
@@ -785,55 +755,39 @@ class MessageViewWidget(BaseTab):
         except Exception:
             pass
 
+    def _position_in_index(self) -> int | None:
+        """Find the displayed message's position in the index list, by msgid."""
+        current_msgid = self._message_ref.msgid.strip().strip("<>")
+        for idx, msg in enumerate(self.bor_app._current_messages):
+            if msg.msgid.strip().strip("<>") == current_msgid:
+                return idx
+        return None
+
+    def _show_index_message(self, idx: int) -> None:
+        """Load the index message at `idx` into this view."""
+        self.bor_app._current_index = idx
+        self._message_ref = self.bor_app._current_messages[idx]
+        self._load_message()
+
     def action_next_message(self) -> None:
         """View the next message in index order.
-        
+
         Only navigates if the current message exists in the index.
         Navigation follows the index order (threaded or date-sorted).
         """
-        # Find current message's position in the index by msgid
-        current_msgid = self._message_ref.msgid.strip().strip("<>")
-        current_idx = None
-        for idx, msg in enumerate(self.bor_app._current_messages):
-            if msg.msgid.strip().strip("<>") == current_msgid:
-                current_idx = idx
-                break
-
-        # If current message is not in index, do nothing
-        if current_idx is None:
-            return
-
-        # Check if there's a next message
-        if current_idx + 1 < len(self.bor_app._current_messages):
-            self.bor_app._current_index = current_idx + 1
-            next_msg = self.bor_app._current_messages[current_idx + 1]
-            self._message_ref = next_msg
-            self._load_message()
+        current_idx = self._position_in_index()
+        if current_idx is not None and current_idx + 1 < len(self.bor_app._current_messages):
+            self._show_index_message(current_idx + 1)
 
     def action_prev_message(self) -> None:
         """View the previous message in index order.
-        
+
         Only navigates if the current message exists in the index.
         Navigation follows the index order (threaded or date-sorted).
         """
-        # Find current message's position in the index by msgid
-        current_msgid = self._message_ref.msgid.strip().strip("<>")
-        current_idx = None
-        for idx, msg in enumerate(self.bor_app._current_messages):
-            if msg.msgid.strip().strip("<>") == current_msgid:
-                current_idx = idx
-                break
-
-        # If current message is not in index, do nothing
-        if current_idx is None:
-            return
-
-        # Check if there's a previous message
-        if current_idx > 0:
-            self.bor_app._current_index = current_idx - 1
-            prev_msg = self.bor_app._current_messages[current_idx - 1]
-            self._message_ref = prev_msg
-            self._load_message()
+        current_idx = self._position_in_index()
+        if current_idx is not None and current_idx > 0:
+            self._show_index_message(current_idx - 1)
 
     def action_reply(self) -> None:
         """Reply to this message."""
@@ -841,6 +795,7 @@ class MessageViewWidget(BaseTab):
             # Check if there are multiple recipients (CC recipients or multiple TO recipients)
             if self._full_message.cc_addrs or len(self._full_message.to_addrs) > 1:
                 from bor.tabs.message_index import ReplyBar
+
                 reply_bar = self.query_one("#reply-bar", ReplyBar)
                 reply_bar.ask(self._do_reply)
             else:
@@ -850,7 +805,9 @@ class MessageViewWidget(BaseTab):
         """Actually open the reply compose."""
         if self._full_message:
             tab_id = self.get_tab_id()
-            self.bor_app.open_compose(reply_to=self._full_message, replace_tab=tab_id, reply_all=reply_all)
+            self.bor_app.open_compose(
+                reply_to=self._full_message, replace_tab=tab_id, reply_all=reply_all
+            )
 
     def action_forward(self) -> None:
         """Forward this message."""
@@ -866,6 +823,7 @@ class MessageViewWidget(BaseTab):
     def action_mark_message(self) -> None:
         """Mark/unmark the current message in the index and advance to next."""
         from bor.tabs.message_index import MessageIndexWidget
+
         try:
             index_widget = self.bor_app.query_one(MessageIndexWidget)
             # Find the current message's index
@@ -878,13 +836,14 @@ class MessageViewWidget(BaseTab):
             index_widget._update_status()
         except Exception:
             pass
-        
+
         # Advance to next message
         self.action_next_message()
 
     def action_apply_flag(self) -> None:
         """Apply a flag to the current message."""
         from bor.tabs.message_index import FlagBar
+
         flag_bar = self.query_one("#flag-bar", FlagBar)
         flag_bar.ask(self._do_apply_flag)
 
@@ -892,56 +851,14 @@ class MessageViewWidget(BaseTab):
         """Actually apply the selected flag to current message. Uppercase = remove."""
         if not self._full_message:
             return
-        
-        msg = self._message_ref
+
+        from bor.tabs.message_index import MessageIndexWidget, apply_flag
+
         current_idx = self.bor_app._current_index
-        
-        # Check if removing (uppercase) or adding (lowercase)
-        is_remove = flag_key.isupper()
-        flag_lower = flag_key.lower()
-        
-        if flag_lower == "u":
-            if is_remove:
-                # Mark as read (remove unread)
-                self.bor_app.mu.mark_read(self._full_message.path)
-                if "unread" in msg.flags:
-                    msg.flags.remove("unread")
-                if "seen" not in msg.flags:
-                    msg.flags.append("seen")
-            else:
-                # Mark as unread
-                self.bor_app.mu.mark_unread(self._full_message.path)
-                if "unread" not in msg.flags:
-                    msg.flags.append("unread")
-                if "seen" in msg.flags:
-                    msg.flags.remove("seen")
-        elif flag_lower == "n":
-            if is_remove:
-                # Remove new flag
-                self.bor_app.mu.mark_read(self._full_message.path)
-                if "new" in msg.flags:
-                    msg.flags.remove("new")
-            else:
-                # Mark as new
-                self.bor_app.mu.mark_unread(self._full_message.path)
-                if "new" not in msg.flags:
-                    msg.flags.append("new")
-                if "unread" not in msg.flags:
-                    msg.flags.append("unread")
-        elif flag_lower == "f":
-            if is_remove:
-                # Remove flagged
-                self.bor_app.mu.mark_flagged(self._full_message.path, False)
-                if "flagged" in msg.flags:
-                    msg.flags.remove("flagged")
-            else:
-                # Mark as flagged/important
-                self.bor_app.mu.mark_flagged(self._full_message.path, True)
-                if "flagged" not in msg.flags:
-                    msg.flags.append("flagged")
-        
+        # Rename the loaded file, but update the index row's flag list.
+        apply_flag(self.bor_app.mu, self._full_message.path, self._message_ref.flags, flag_key)
+
         # Update the row in index
-        from bor.tabs.message_index import MessageIndexWidget
         try:
             index_widget = self.bor_app.query_one(MessageIndexWidget)
             index_widget._update_row_style(current_idx)
@@ -951,6 +868,7 @@ class MessageViewWidget(BaseTab):
     def _confirm_action(self, prompt: str, callback: Callable) -> None:
         """Show confirmation bar and execute callback if confirmed."""
         from bor.tabs.message_index import ConfirmBar
+
         confirm_bar = self.query_one("#confirm-bar", ConfirmBar)
         confirm_bar.ask(prompt, callback)
 
@@ -962,31 +880,49 @@ class MessageViewWidget(BaseTab):
     def _do_archive(self) -> None:
         """Actually archive the message."""
         if self._full_message:
-            config = get_config()
-            current_idx = self.bor_app._current_index
-            self.bor_app.mu.move(self._full_message.path, config.folders.archive)
-            
-            # Refresh the index to remove archived message
-            self._refresh_index_after_move(current_idx)
-            
-            # Move to next message or close
-            if self.bor_app._current_index < len(self.bor_app._current_messages):
-                next_msg = self.bor_app._current_messages[self.bor_app._current_index]
-                self._message_ref = next_msg
-                self._load_message()
-            else:
-                self.close_tab()
+            self._move_and_advance(get_config().folders.archive)
 
-    def _refresh_index_after_move(self, removed_idx: int) -> None:
+    def _move_and_advance(self, folder: str) -> None:
+        """Move the displayed message to `folder`, then show the next one or close."""
+        # Pick the successor from the list as it is now: the index refresh
+        # below runs asynchronously, so the list still contains the message
+        # being moved for the rest of this call.
+        messages = self.bor_app._current_messages
+        position = self._position_in_index()
+        next_msg = None
+        if position is not None and position + 1 < len(messages):
+            next_msg = messages[position + 1]
+
+        self.bor_app.mu.move(self._full_message.path, folder)
+
+        if next_msg is None:
+            self._refresh_index_after_move()
+            self.close_tab()
+            return
+
+        self._show_index_message(position + 1)
+        self._refresh_index_after_move()
+
+    def _refresh_index_after_move(self) -> None:
         """Refresh the index after a message was moved/deleted."""
-        import asyncio
+        self.bor_app.run_worker(self._refresh_index_and_resync(), name="refresh-after-move")
+
+    async def _refresh_index_and_resync(self) -> None:
+        """Re-run the index query, then point the index cursor at this view's message."""
         from bor.tabs.message_index import MessageIndexWidget
+
         try:
             index_widget = self.bor_app.query_one(MessageIndexWidget)
-            # Run async refresh
-            asyncio.create_task(index_widget.search(index_widget.current_query))
         except Exception:
-            pass
+            return
+        await index_widget.rerun_view()
+
+        # search() resets the shared cursor to the top; keep it on the message
+        # shown here so M, flags and N/P keep acting on the right row.
+        if self.is_mounted:
+            position = self._position_in_index()
+            if position is not None:
+                index_widget._restore_cursor(position)
 
     def action_delete(self) -> None:
         """Delete this message with confirmation."""
@@ -994,22 +930,9 @@ class MessageViewWidget(BaseTab):
             self._confirm_action("Delete this message?", self._do_delete)
 
     def _do_delete(self) -> None:
-        """Actually delete the message."""
+        """Actually delete the message (move it to the trash folder)."""
         if self._full_message:
-            config = get_config()
-            current_idx = self.bor_app._current_index
-            self.bor_app.mu.move(self._full_message.path, config.folders.trash)
-            
-            # Refresh the index to remove deleted message
-            self._refresh_index_after_move(current_idx)
-            
-            # Move to next message or close
-            if self.bor_app._current_index < len(self.bor_app._current_messages):
-                next_msg = self.bor_app._current_messages[self.bor_app._current_index]
-                self._message_ref = next_msg
-                self._load_message()
-            else:
-                self.close_tab()
+            self._move_and_advance(get_config().folders.trash)
 
     def action_attachments(self) -> None:
         """View attachments."""
@@ -1030,7 +953,7 @@ class MessageViewWidget(BaseTab):
         link = getattr(event, "link", None)
         if link:
             self._open_url(link)
-            self.notify(f"Opening: {link[:50]}...")
+            self.notify(f"Opening: {link[:50]}...", markup=False)
             event.prevent_default()
             event.stop()
 
@@ -1038,41 +961,41 @@ class MessageViewWidget(BaseTab):
         """Extract URLs from the message content."""
         if not self._content:
             return []
-        
+
         # URL regex pattern
         url_pattern = r'https?://[^\s<>"\')\]]+'
         urls = re.findall(url_pattern, self._content)
-        
+
         # Also check HTML body for href links
         if self._full_message and self._full_message.body_html:
             href_pattern = r'href=["\']?(https?://[^"\'>\s]+)'
             html_urls = re.findall(href_pattern, self._full_message.body_html)
             urls.extend(html_urls)
-        
+
         # Remove duplicates while preserving order
         seen = set()
         unique_urls = []
         for url in urls:
             # Clean up URL (remove trailing punctuation)
-            url = url.rstrip('.,;:!?')
+            url = url.rstrip(".,;:!?")
             if url not in seen:
                 seen.add(url)
                 unique_urls.append(url)
-        
+
         return unique_urls
 
     def action_open_url(self) -> None:
         """Open a URL from the message."""
         urls = self._extract_urls()
-        
+
         if not urls:
             self.notify("No URLs found in message")
             return
-        
+
         if len(urls) == 1:
             # Only one URL, open it directly
             self._open_url(urls[0])
-            self.notify(f"Opening: {urls[0][:50]}...")
+            self.notify(f"Opening: {urls[0][:50]}...", markup=False)
         else:
             # Multiple URLs - show selection
             picker = self.query_one("#url-picker", UrlPickerBar)
@@ -1081,7 +1004,7 @@ class MessageViewWidget(BaseTab):
     def _open_url_from_picker(self, url: str) -> None:
         """Open a URL selected from the picker."""
         self._open_url(url)
-        self.notify(f"Opening: {url[:50]}...")
+        self.notify(f"Opening: {url[:50]}...", markup=False)
 
     def _open_url(self, url: str) -> None:
         """Open a URL in the system browser."""
@@ -1141,11 +1064,7 @@ class MessageViewWidget(BaseTab):
         try:
             config = get_config()
             tmp_dir_str = config.html.browser_tmp_dir
-            tmp_dir = (
-                Path(tmp_dir_str).expanduser()
-                if tmp_dir_str
-                else Path(tempfile.gettempdir())
-            )
+            tmp_dir = Path(tmp_dir_str).expanduser() if tmp_dir_str else Path(tempfile.gettempdir())
             tmp_dir.mkdir(parents=True, exist_ok=True)
 
             # Use a deterministic filename based on the message identifier so
@@ -1158,4 +1077,4 @@ class MessageViewWidget(BaseTab):
             webbrowser.open(tmp_path.as_uri())
             self.notify("Message opened in browser")
         except Exception as e:
-            self.notify(f"Could not open browser: {e}")
+            self.notify(f"Could not open browser: {e}", markup=False)

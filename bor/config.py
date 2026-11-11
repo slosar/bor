@@ -6,10 +6,12 @@ Handles loading and parsing of the configuration file from ~/.config/bor.conf
 
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
+
+from rich.errors import StyleSyntaxError
+from rich.style import Style
 
 try:
     import tomllib
@@ -18,11 +20,13 @@ except ImportError:
 
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "bor.conf"
+MAILRC_PATH = Path.home() / ".mailrc"
 
 
 @dataclass
 class GeneralConfig:
     """General configuration settings."""
+
     max_messages: int = 400
     date_format: str = "%Y-%m-%d %H:%M"
     short_date_format: str = "%m/%d"
@@ -33,6 +37,7 @@ class GeneralConfig:
 @dataclass
 class FoldersConfig:
     """Maildir folder paths configuration."""
+
     inbox: str = "/INBOX"
     archive: str = "/Archive"
     drafts: str = "/Drafts"
@@ -43,6 +48,7 @@ class FoldersConfig:
 @dataclass
 class SmtpConfig:
     """SMTP server configuration."""
+
     server: str = "smtp.example.com"
     port: int = 587
     username: str = ""
@@ -54,6 +60,7 @@ class SmtpConfig:
 @dataclass
 class IdentityConfig:
     """User identity configuration."""
+
     name: str = ""
     email: str = ""
     organization: str = ""
@@ -63,6 +70,7 @@ class IdentityConfig:
 @dataclass
 class ColorsConfig:
     """Color scheme configuration."""
+
     unread: str = "blue"
     important: str = "dark_orange"
     marked: str = "reverse"
@@ -73,12 +81,14 @@ class ColorsConfig:
 @dataclass
 class SyncConfig:
     """Synchronization command configuration."""
+
     command: str = "mbsync -a"
 
 
 @dataclass
 class ThreadingConfig:
     """Threading display configuration."""
+
     enabled: bool = True
     indicator: str = "↳"
 
@@ -86,7 +96,8 @@ class ThreadingConfig:
 @dataclass
 class DisplayConfig:
     """Display settings configuration."""
-    columns: List[str] = field(default_factory=lambda: ["date", "from", "subject", "flags"])
+
+    columns: list[str] = field(default_factory=lambda: ["date", "from", "subject", "flags"])
     date_width: int = 12
     from_width: int = 20
     subject_width: int = 0
@@ -104,6 +115,7 @@ class DisplayConfig:
 @dataclass
 class HtmlConfig:
     """HTML rendering configuration."""
+
     renderer: str = "html2text"
     open_links_in_browser: bool = True
     browser_tmp_dir: str = ""
@@ -112,6 +124,7 @@ class HtmlConfig:
 @dataclass
 class AttachmentsConfig:
     """Attachments handling configuration."""
+
     save_directory: str = "~/Downloads"
     use_kitty_icat: bool = True
     force_kitty_support: bool = False
@@ -120,12 +133,14 @@ class AttachmentsConfig:
 @dataclass
 class EditorConfig:
     """Editor configuration."""
+
     external: str = ""
 
 
 @dataclass
 class Config:
     """Main configuration container."""
+
     general: GeneralConfig = field(default_factory=GeneralConfig)
     folders: FoldersConfig = field(default_factory=FoldersConfig)
     smtp: SmtpConfig = field(default_factory=SmtpConfig)
@@ -137,13 +152,20 @@ class Config:
     html: HtmlConfig = field(default_factory=HtmlConfig)
     attachments: AttachmentsConfig = field(default_factory=AttachmentsConfig)
     editor: EditorConfig = field(default_factory=EditorConfig)
-    aliases: Dict[str, str] = field(default_factory=dict)
-    email_aliases: Dict[str, str] = field(default_factory=dict)
+    aliases: dict[str, str] = field(default_factory=dict)
+    email_aliases: dict[str, str] = field(default_factory=dict)
+    # Problems found while loading, shown to the user once the app starts.
+    # Not a config section (init=False keeps it out of from_dict).
+    warnings: list[str] = field(default_factory=list, init=False, repr=False, compare=False)
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Config":
+    def from_dict(cls, data: dict[str, Any]) -> Config:
         """
         Create a Config instance from a dictionary.
+
+        Unknown sections and options are skipped rather than rejected, so one
+        typo does not discard the rest of the file; each one is recorded in
+        `config.warnings`.
 
         Args:
             data: Configuration dictionary (typically from TOML file)
@@ -152,50 +174,57 @@ class Config:
             Config instance with all settings populated
         """
         config = cls()
+        sections = {section.name: section for section in fields(cls) if section.init}
 
-        if "general" in data:
-            config.general = GeneralConfig(**data["general"])
+        for name, value in data.items():
+            if name not in sections:
+                config.warnings.append(f"Unknown config section [{name}] ignored")
+                continue
+            if not isinstance(value, dict):
+                config.warnings.append(f"[{name}] must be a table; using defaults")
+                continue
 
-        if "folders" in data:
-            config.folders = FoldersConfig(**data["folders"])
+            current = getattr(config, name)
+            if not is_dataclass(current):
+                # Free-form tables such as [aliases] and [email_aliases]
+                setattr(config, name, value)
+                continue
 
-        if "smtp" in data:
-            config.smtp = SmtpConfig(**data["smtp"])
+            options = {option.name for option in fields(current)}
+            for key in value:
+                if key not in options:
+                    config.warnings.append(f"Unknown config option {name}.{key} ignored")
+            known = {key: option for key, option in value.items() if key in options}
+            setattr(config, name, type(current)(**known))
 
-        if "identity" in data:
-            config.identity = IdentityConfig(**data["identity"])
-
-        if "colors" in data:
-            config.colors = ColorsConfig(**data["colors"])
-
-        if "sync" in data:
-            config.sync = SyncConfig(**data["sync"])
-
-        if "threading" in data:
-            config.threading = ThreadingConfig(**data["threading"])
-
-        if "display" in data:
-            config.display = DisplayConfig(**data["display"])
-
-        if "html" in data:
-            config.html = HtmlConfig(**data["html"])
-
-        if "attachments" in data:
-            config.attachments = AttachmentsConfig(**data["attachments"])
-
-        if "editor" in data:
-            config.editor = EditorConfig(**data["editor"])
-
-        if "aliases" in data:
-            config.aliases = data["aliases"]
-
-        if "email_aliases" in data:
-            config.email_aliases = data["email_aliases"]
-
+        _check_colors(config)
         return config
 
 
-def load_config(path: Optional[Path] = None) -> Config:
+# [colors] options that are applied as Rich styles to message-list rows
+_ROW_COLOR_OPTIONS = ("unread", "important")
+
+
+def _check_colors(config: Config) -> None:
+    """Replace row colors Rich cannot parse with the defaults, recording a warning.
+
+    An invalid color (e.g. "orange"; Rich calls it "orange1") silently dropped
+    the row highlight, and used to crash the app when a row was re-rendered.
+    """
+    defaults = ColorsConfig()
+    for option in _ROW_COLOR_OPTIONS:
+        value = getattr(config.colors, option)
+        try:
+            Style.parse(f"bold {value}")
+        except (StyleSyntaxError, TypeError):
+            fallback = getattr(defaults, option)
+            config.warnings.append(
+                f"Invalid color {value!r} for colors.{option}; using {fallback!r}"
+            )
+            setattr(config.colors, option, fallback)
+
+
+def load_config(path: Path | None = None) -> Config:
     """
     Load configuration from file.
 
@@ -215,25 +244,25 @@ def load_config(path: Optional[Path] = None) -> Config:
             data = tomllib.load(f)
         return Config.from_dict(data)
     except Exception as e:
-        print(f"Warning: Could not load config from {config_path}: {e}")
-        return Config()
+        config = Config()
+        config.warnings.append(f"Could not load {config_path}: {e}. Using defaults.")
+        return config
 
 
-def load_mailrc_aliases() -> Dict[str, str]:
+def load_mailrc_aliases() -> dict[str, str]:
     """
     Load email aliases from ~/.mailrc file.
 
     Returns:
         Dictionary mapping alias names to email addresses.
     """
-    mailrc_path = Path.home() / ".mailrc"
-    aliases: Dict[str, str] = {}
+    aliases: dict[str, str] = {}
 
-    if not mailrc_path.exists():
+    if not MAILRC_PATH.exists():
         return aliases
 
     try:
-        with open(mailrc_path, "r") as f:
+        with open(MAILRC_PATH) as f:
             for line in f:
                 line = line.strip()
                 if line.startswith("alias "):
@@ -247,7 +276,7 @@ def load_mailrc_aliases() -> Dict[str, str]:
 
 
 # Global config instance
-_config: Optional[Config] = None
+_config: Config | None = None
 
 
 def get_config() -> Config:
@@ -292,7 +321,7 @@ def _parse_override_value(raw_value: str) -> Any:
         return raw_value
 
 
-def apply_config_overrides(config: Config, overrides: List[str]) -> Config:
+def apply_config_overrides(config: Config, overrides: list[str]) -> Config:
     """
     Apply CLI-style overrides to a config object.
 
@@ -308,9 +337,7 @@ def apply_config_overrides(config: Config, overrides: List[str]) -> Config:
         raw_value = raw_value.strip()
 
         if "." not in key_path:
-            raise ValueError(
-                f"Invalid override key '{key_path}': expected section.option"
-            )
+            raise ValueError(f"Invalid override key '{key_path}': expected section.option")
 
         section_name, option_name = key_path.split(".", 1)
 
@@ -329,4 +356,5 @@ def apply_config_overrides(config: Config, overrides: List[str]) -> Config:
         parsed_value = _parse_override_value(raw_value)
         setattr(section, option_name, parsed_value)
 
+    _check_colors(config)
     return config

@@ -3,6 +3,7 @@
 import tempfile
 from pathlib import Path
 from datetime import datetime
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -211,6 +212,26 @@ class TestEmailMessage:
         assert msg.has_attachments
         assert msg.priority == "high"
 
+    def test_from_mu_json_uses_unix_date_and_utc_offset(self):
+        """Use mu 1.14 date fields to preserve the sender's timezone."""
+        data = {
+            ":date": [30878, 30260, 0],
+            ":date-unix": 1609459200,
+            ":utc-offset": 3600,
+        }
+
+        msg = EmailMessage.from_mu_json(data)
+
+        assert msg.date == datetime.fromisoformat("2021-01-01T01:00:00+01:00")
+
+    def test_from_mu_json_uses_utc_offset_with_legacy_date(self):
+        """Apply mu's offset when a wrapper omits the Unix timestamp."""
+        data = {":date": 1609459200, ":utc-offset": -18000}
+
+        msg = EmailMessage.from_mu_json(data)
+
+        assert msg.date == datetime.fromisoformat("2020-12-31T19:00:00-05:00")
+
     def test_from_mu_json_with_reply_to_list(self):
         """Test that Reply-To is parsed from mu JSON when present as a list."""
         data = {
@@ -351,3 +372,43 @@ class TestMuInterface:
         """Test undo with empty history."""
         mu = MuInterface()
         assert not mu.undo_move()
+
+
+def _maildir_with_message(tmp_path):
+    root = tmp_path / "Mail"
+    (root / "INBOX" / "cur").mkdir(parents=True)
+    message = root / "INBOX" / "cur" / "1.host:2,S"
+    message.write_text("Subject: x\n\nbody")
+    mu = MuInterface()
+    mu._root_maildir = str(root)
+    calls = []
+    mu._run_mu = lambda args, capture_output=True: calls.append(args) or MagicMock(returncode=0)
+    return mu, root, message, calls
+
+
+def test_undo_move_restores_file_and_reindexes(tmp_path):
+    mu, root, message, calls = _maildir_with_message(tmp_path)
+    archived = root / "Archive" / "cur" / message.name
+
+    assert mu.move(str(message), "/Archive") == str(archived)
+    assert mu.wait_for_reindex()
+    calls.clear()
+
+    assert mu.undo_move()
+    assert mu.wait_for_reindex()
+
+    assert message.exists() and not archived.exists()
+    assert calls == [["remove", str(archived)], ["add", str(message)]]
+
+
+def test_failed_move_is_not_recorded_for_undo(tmp_path, monkeypatch):
+    mu, root, message, calls = _maildir_with_message(tmp_path)
+
+    def failing_move(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("bor.mu.shutil.move", failing_move)
+
+    assert mu.move(str(message), "/Archive") is None
+    assert mu._move_history == []
+    assert calls == []

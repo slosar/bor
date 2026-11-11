@@ -77,6 +77,8 @@ BorApp (Textual app)
 | `bor/tabs/compose.py` | `ComposeWidget` — MIME building and SMTP sending; `AddressInput` with mu cfind autocompletion |
 | `bor/tabs/attachments.py` | `AttachmentsWidget` — extract and preview (kitty icat) attachments |
 | `bor/tabs/sync.py` | `SyncWidget` — run arbitrary external sync command with live output |
+| `bor/editing.py` | Clipboard and kill-line helpers shared by the input widgets |
+| `bor/ical.py` | `text/calendar` invite parsing into `CalendarEvent` |
 
 ### Tab System
 
@@ -89,7 +91,7 @@ BorApp (Textual app)
 All mail operations go through `MuInterface` in `bor/mu.py` via subprocess:
 - `find(query)` → `mu find --format=json ...` → `List[EmailMessage]`
 - `view(path)` → reads the raw mail file with Python's `email.parser`
-- `move(path, folder)` → `mu move ...`
+- `move(path, folder)` → moves the file directly, then queues `mu remove`/`mu add` on a background thread (`queue_reindex`)
 - `find_contacts(query)` → `mu cfind --format=json ...`
 - `extract_attachment(path, idx)` → `mu extract ...`
 
@@ -103,9 +105,9 @@ If you need to study oddities with respect to how mu operates, you can find mu s
 
 ### Styling
 
-Textual CSS is defined inline in widget classes. Key CSS classes: `.unread`, `.flagged`, `.marked`, `.quoted`.
+Textual CSS is defined inline in widget classes (`DEFAULT_CSS`). Message-list row colors come from `[colors]` as Rich styles, not CSS classes.
 
 ## Workflow Rules
 
 - After implementing a new feature, update CHANGELOG.md with a summary 
-- Make sure `documentation/keyboard_shortcuts.md` and `documentation/cofiguration.md` are kept up to date regarding recent changes.
+- Make sure `documentation/keyboard_shortcuts.md` and `documentation/configuration.md` are kept up to date regarding recent changes.

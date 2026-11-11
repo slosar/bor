@@ -8,25 +8,22 @@ between different views (message index, message view, compose, etc.)
 from __future__ import annotations
 
 import argparse
+import asyncio
 import gc
+import hashlib
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, TYPE_CHECKING
 
 from textual import events
 from textual.app import App, ComposeResult, InvalidThemeError
 from textual.binding import Binding
-from textual.containers import Container
-from textual.widgets import TabbedContent, TabPane, Footer, Header
+from textual.content import Content
+from textual.widgets import Footer, Header, TabbedContent, TabPane
 
 from bor import __version__
-from bor.config import get_config, Config, load_config, set_config, apply_config_overrides
-from bor.mu import MuInterface, EmailMessage
+from bor.config import Config, apply_config_overrides, get_config, load_config, set_config
+from bor.mu import EmailMessage, MuInterface
 from bor.tabs.base import BaseTab
-
-if TYPE_CHECKING:
-    pass
-
 
 # Alt+digit unicode character mapping (varies by OS/terminal)
 ALT_DIGIT_MAP = {
@@ -88,11 +85,7 @@ def _tune_gc() -> None:
 
 
 class BorTabbedContent(TabbedContent):
-    """Extended TabbedContent with tab change notifications."""
-
-    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
-        """Handle tab activation."""
-        pass
+    """The app's TabbedContent; a distinct type so it can be queried unambiguously."""
 
 
 class BorApp(App):
@@ -118,69 +111,11 @@ class BorApp(App):
         height: 1fr;
     }
 
-    .header-row {
-        height: auto;
-        padding: 0 1;
-        background: $surface;
-    }
-
-    .message-list {
-        height: 1fr;
-    }
-
-    .message-row {
-        height: 1;
-    }
-
-    .message-row.unread {
-        color: $primary;
-    }
-
-    .message-row.important {
-        color: $warning;
-    }
-
-    .message-row.marked {
-        background: $primary-darken-1;
-    }
-
     .status-bar {
         height: 1;
         dock: bottom;
         background: $surface;
         padding: 0 1;
-    }
-
-    .search-input {
-        width: 100%;
-        height: 1;
-    }
-
-    MessageView {
-        height: 1fr;
-    }
-
-    .message-header {
-        background: $surface;
-        padding: 1;
-    }
-
-    .message-body {
-        height: 1fr;
-        padding: 1;
-    }
-
-    ComposeView {
-        height: 1fr;
-    }
-
-    .compose-header {
-        height: auto;
-        padding: 1;
-    }
-
-    .compose-body {
-        height: 1fr;
     }
 
     Input {
@@ -211,19 +146,18 @@ class BorApp(App):
         try:
             self.theme = self.config.general.theme
         except InvalidThemeError:
-            print(
-                f"Warning: Unknown theme '{self.config.general.theme}'. "
-                "Falling back to default 'textual-dark'."
+            self.config.warnings.append(
+                f"Unknown theme '{self.config.general.theme}'; using 'textual-dark'"
             )
             self.theme = "textual-dark"
         self.mu: MuInterface = MuInterface()
         self._tab_counter: int = 0
-        self._tabs: Dict[str, TabPane] = {}
-        self._tab_order: List[str] = []
-        self._current_messages: List[EmailMessage] = []
+        self._tabs: dict[str, TabPane] = {}
+        self._tab_order: list[str] = []
+        # The message list shown in the index and the cursor position within
+        # it; message views use these for N/P navigation.
+        self._current_messages: list[EmailMessage] = []
         self._current_index: int = 0
-        self._marked_messages: set = set()
-        self._threading_enabled: bool = self.config.threading.enabled
         self._active_tab_id: str = "tab-0"
 
     def compose(self) -> ComposeResult:
@@ -233,17 +167,25 @@ class BorApp(App):
             # Tab 0: Message Index (always present)
             with TabPane("Message Index", id="tab-0"):
                 from bor.tabs.message_index import MessageIndexWidget
+
                 yield MessageIndexWidget(id="message-index")
         yield Footer()
 
     def on_mount(self) -> None:
         """Handle application mount."""
+        # Configuration problems: anything printed before the app started
+        # would be hidden by the full-screen UI, so report them here.
+        for warning in self.config.warnings:
+            self.notify(
+                warning, title="Configuration", severity="warning", timeout=15, markup=False
+            )
         # Load inbox by default, then focus
         self.call_later(self._load_inbox)
 
     async def _focus_message_index(self) -> None:
         """Focus the message index after loading."""
         from bor.tabs.message_index import MessageIndexWidget
+
         try:
             widget = self.query_one(MessageIndexWidget)
             widget.focus()
@@ -253,7 +195,7 @@ class BorApp(App):
         except Exception:
             pass
 
-    def _focus_widget(self, widget: "BaseTab") -> None:
+    def _focus_widget(self, widget: BaseTab) -> None:
         """Focus a widget and its first focusable child."""
         try:
             widget.focus()
@@ -268,11 +210,18 @@ class BorApp(App):
     async def _load_inbox(self) -> None:
         """Load inbox messages on startup."""
         from bor.tabs.message_index import MessageIndexWidget
+
         widget = self.query_one(MessageIndexWidget)
         await widget.search(f'maildir:"{self.config.folders.inbox}"')
         # Focus after loading
         await self._focus_message_index()
         _tune_gc()
+        # Look up the root maildir (`mu info`) now, off the UI thread, rather
+        # than on the first archive or send.
+        try:
+            await asyncio.to_thread(self.mu.get_root_maildir)
+        except Exception:
+            pass
 
     def on_key(self, event: events.Key) -> None:
         """Handle key events for tab switching."""
@@ -372,6 +321,7 @@ class BorApp(App):
         if active_id == "tab-0":
             # Focus message index
             from bor.tabs.message_index import MessageIndexWidget
+
             try:
                 widget = self.query_one(MessageIndexWidget)
                 table = widget.query_one("DataTable")
@@ -391,27 +341,23 @@ class BorApp(App):
 
     def action_prev_tab(self) -> None:
         """Switch to the previous tab."""
-        tabs = self.query_one(BorTabbedContent)
-        tab_ids = self._ordered_tab_ids()
-        current = tabs.active or "tab-0"
-        if current in tab_ids:
-            idx = tab_ids.index(current)
-            new_idx = (idx - 1) % len(tab_ids)
-            tabs.active = tab_ids[new_idx]
-            self.call_later(lambda: self._focus_active_tab())
+        self._cycle_tab(-1)
 
     def action_next_tab(self) -> None:
         """Switch to the next tab."""
+        self._cycle_tab(1)
+
+    def _cycle_tab(self, step: int) -> None:
+        """Activate the tab `step` positions away, wrapping around."""
         tabs = self.query_one(BorTabbedContent)
         tab_ids = self._ordered_tab_ids()
         current = tabs.active or "tab-0"
         if current in tab_ids:
             idx = tab_ids.index(current)
-            new_idx = (idx + 1) % len(tab_ids)
-            tabs.active = tab_ids[new_idx]
+            tabs.active = tab_ids[(idx + step) % len(tab_ids)]
             self.call_later(lambda: self._focus_active_tab())
 
-    def add_tab(self, title: str, widget: "BaseTab", replace_id: Optional[str] = None) -> str:
+    def add_tab(self, title: str, widget: BaseTab, replace_id: str | None = None) -> str:
         """
         Add a new tab to the application.
 
@@ -430,11 +376,12 @@ class BorApp(App):
         tab_id = f"tab-{self._tab_counter}"
 
         # Create and add the new tab pane FIRST
-        pane = TabPane(title, id=tab_id)
+        # Titles are message subjects: never parse them as markup
+        pane = TabPane(Content(title), id=tab_id)
         tabs.add_pane(pane)
 
         # Now remove old tab if replacing (after new one is added to avoid focus loss)
-        replace_index: Optional[int] = None
+        replace_index: int | None = None
         if replace_id and replace_id in self._tabs:
             if replace_id in self._tab_order:
                 replace_index = self._tab_order.index(replace_id)
@@ -450,7 +397,7 @@ class BorApp(App):
         else:
             self._tab_order.append(tab_id)
         tabs.active = tab_id
-        
+
         # Defer focus to ensure widget is fully mounted
         self.call_later(lambda: self._focus_widget(widget))
 
@@ -469,7 +416,7 @@ class BorApp(App):
             # Get the Tab widget (button) for this pane
             try:
                 tab = tabs.get_tab(tab_id)
-                tab.label = title
+                tab.label = Content(title)
             except Exception:
                 pass
 
@@ -486,7 +433,6 @@ class BorApp(App):
 
         if tab_id in self._tabs:
             tabs = self.query_one(BorTabbedContent)
-            pane = self._tabs[tab_id]
             # Use remove_pane to properly remove both the tab button and pane
             tabs.remove_pane(tab_id)
             del self._tabs[tab_id]
@@ -497,7 +443,7 @@ class BorApp(App):
             tabs.active = "tab-0"
             self.call_later(lambda: self._focus_active_tab())
 
-    def open_message(self, message: EmailMessage, replace_tab: Optional[str] = None) -> None:
+    def open_message(self, message: EmailMessage, replace_tab: str | None = None) -> None:
         """
         Open a message in a new tab.
 
@@ -507,40 +453,29 @@ class BorApp(App):
         """
         from bor.tabs.message import MessageViewWidget
 
-        # If replacing a tab, just open the message in that slot
-        if replace_tab:
-            import hashlib
-            safe_id = hashlib.md5(message.path.encode()).hexdigest()[:12]
-            widget = MessageViewWidget(message, id=f"msg-{safe_id}")
-            title = message.subject[:20] + "..." if len(message.subject) > 20 else message.subject
-            self.add_tab(title, widget, replace_id=replace_tab)
-            return
+        if not replace_tab:
+            # Switch to an existing tab already showing this message, if any
+            for tab_id, pane in self._tabs.items():
+                for child in pane.walk_children():
+                    if isinstance(child, MessageViewWidget):
+                        if child.message and child.message.path == message.path:
+                            tabs = self.query_one(BorTabbedContent)
+                            tabs.active = tab_id
+                            return
 
-        # Find if we already have a tab for this message
-        for tab_id, pane in self._tabs.items():
-            # Check if any child is a MessageViewWidget with same message
-            for child in pane.walk_children():
-                if isinstance(child, MessageViewWidget):
-                    if child.message and child.message.path == message.path:
-                        # Switch to existing tab
-                        tabs = self.query_one(BorTabbedContent)
-                        tabs.active = tab_id
-                        return
-
-        # Create new message view - use hash of path for ID (path contains invalid chars)
-        import hashlib
+        # Widget IDs cannot contain path characters, so use a hash of the path
         safe_id = hashlib.md5(message.path.encode()).hexdigest()[:12]
         widget = MessageViewWidget(message, id=f"msg-{safe_id}")
         title = message.subject[:20] + "..." if len(message.subject) > 20 else message.subject
-        self.add_tab(title, widget)
+        self.add_tab(title, widget, replace_id=replace_tab)
 
     def open_compose(
         self,
-        reply_to: Optional[EmailMessage] = None,
-        forward: Optional[EmailMessage] = None,
-        edit_draft: Optional[EmailMessage] = None,
-        replace_tab: Optional[str] = None,
-        reply_all: bool = False
+        reply_to: EmailMessage | None = None,
+        forward: EmailMessage | None = None,
+        edit_draft: EmailMessage | None = None,
+        replace_tab: str | None = None,
+        reply_all: bool = False,
     ) -> None:
         """
         Open the compose tab.
@@ -555,10 +490,7 @@ class BorApp(App):
         from bor.tabs.compose import ComposeWidget
 
         widget = ComposeWidget(
-            reply_to=reply_to,
-            forward=forward,
-            edit_draft=edit_draft,
-            reply_all=reply_all
+            reply_to=reply_to, forward=forward, edit_draft=edit_draft, reply_all=reply_all
         )
 
         if reply_to:
@@ -572,7 +504,7 @@ class BorApp(App):
 
         self.add_tab(title, widget, replace_id=replace_tab)
 
-    def open_attachments(self, message: EmailMessage, replace_tab: Optional[str] = None) -> None:
+    def open_attachments(self, message: EmailMessage, replace_tab: str | None = None) -> None:
         """
         Open the attachments tab for a message.
 
@@ -592,26 +524,6 @@ class BorApp(App):
 
         widget = SyncWidget(self.config.sync.command)
         self.add_tab("Sync", widget)
-
-    def get_current_message(self) -> Optional[EmailMessage]:
-        """Get the currently focused message."""
-        if 0 <= self._current_index < len(self._current_messages):
-            return self._current_messages[self._current_index]
-        return None
-
-    def get_next_message(self) -> Optional[EmailMessage]:
-        """Get the next message in the list."""
-        if self._current_index + 1 < len(self._current_messages):
-            self._current_index += 1
-            return self._current_messages[self._current_index]
-        return None
-
-    def get_prev_message(self) -> Optional[EmailMessage]:
-        """Get the previous message in the list."""
-        if self._current_index > 0:
-            self._current_index -= 1
-            return self._current_messages[self._current_index]
-        return None
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -634,7 +546,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Main entry point for Bor application."""
     parser = _build_arg_parser()
     args = parser.parse_args(argv)

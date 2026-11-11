@@ -79,33 +79,37 @@ def report(path: str = LOG) -> int:
         ):
             v = [f[field] for f in frames]
             print(
-                f"  {label:20}{sum(v)/len(v):9.1f}{pct(v,.5):9.1f}"
-                f"{pct(v,.9):9.1f}{pct(v,.99):9.1f}{max(v):9.1f}"
+                f"  {label:20}{sum(v) / len(v):9.1f}{pct(v, 0.5):9.1f}"
+                f"{pct(v, 0.9):9.1f}{pct(v, 0.99):9.1f}{max(v):9.1f}"
             )
         print()
-        print(f"  frame rate            {len(frames)/span:6.1f} fps over {span:.1f}s")
-        print(f"  output throughput     {total_bytes/span/1024:6.1f} KiB/s"
-              f"  ({total_bytes/1024/1024:.1f} MiB total)")
+        print(f"  frame rate            {len(frames) / span:6.1f} fps over {span:.1f}s")
+        print(
+            f"  output throughput     {total_bytes / span / 1024:6.1f} KiB/s"
+            f"  ({total_bytes / 1024 / 1024:.1f} MiB total)"
+        )
         full = sum(1 for f in frames if f.get("full"))
-        print(f"  full-screen repaints  {full} / {len(frames)}"
-              f"  ({100*full/len(frames):.0f}%)")
+        print(f"  full-screen repaints  {full} / {len(frames)}  ({100 * full / len(frames):.0f}%)")
 
     drains = [r for r in rows if r["t"] == "drain"]
     if drains:
         v = [d["drain_ms"] for d in drains]
         tot = sum(v)
-        print(f"  tty drain total       {tot/1000:6.2f}s"
-              f"   mean {sum(v)/len(v):.2f}ms  max {max(v):.1f}ms")
+        print(
+            f"  tty drain total       {tot / 1000:6.2f}s"
+            f"   mean {sum(v) / len(v):.2f}ms  max {max(v):.1f}ms"
+        )
 
     if keys:
         v = [k["latency_ms"] for k in keys if k.get("latency_ms") is not None]
         if v:
-            print(f"\n  key -> first frame    mean {sum(v)/len(v):6.1f}ms"
-                  f"  p90 {pct(v,.9):6.1f}ms  max {max(v):6.1f}ms")
+            print(
+                f"\n  key -> first frame    mean {sum(v) / len(v):6.1f}ms"
+                f"  p90 {pct(v, 0.9):6.1f}ms  max {max(v):6.1f}ms"
+            )
         nf = [k["frames"] for k in keys if k.get("frames") is not None]
         if nf:
-            print(f"  frames per keypress   mean {sum(nf)/len(nf):6.1f}"
-                  f"  max {max(nf)}")
+            print(f"  frames per keypress   mean {sum(nf) / len(nf):6.1f}  max {max(nf)}")
 
     if renders:
         by_widget: dict[str, list[float]] = defaultdict(list)
@@ -113,8 +117,10 @@ def report(path: str = LOG) -> int:
             by_widget[r["widget"]].append(r["ms"])
         print("\n  widget render_lines (ms, only >1ms samples logged):")
         for name, v in sorted(by_widget.items(), key=lambda kv: -sum(kv[1]))[:12]:
-            print(f"    {name:32} n={len(v):5d}  total={sum(v):8.1f}"
-                  f"  mean={sum(v)/len(v):6.2f}  max={max(v):7.1f}")
+            print(
+                f"    {name:32} n={len(v):5d}  total={sum(v):8.1f}"
+                f"  mean={sum(v) / len(v):6.2f}  max={max(v):7.1f}"
+            )
 
     mus = [r for r in rows if r["t"] in ("mu", "muview")]
     if mus:
@@ -124,8 +130,10 @@ def report(path: str = LOG) -> int:
             agg[(m["t"], m.get("cmd", "view"), m["main"])].append(m["ms"])
         for (kind, cmd, main), v in sorted(agg.items(), key=lambda kv: -sum(kv[1])):
             flag = "MAIN THREAD" if main else "thread"
-            print(f"    {cmd:28} {flag:12} n={len(v):4d}  total={sum(v):8.1f}ms"
-                  f"  mean={sum(v)/len(v):7.1f}  max={max(v):8.1f}ms")
+            print(
+                f"    {cmd:28} {flag:12} n={len(v):4d}  total={sum(v):8.1f}ms"
+                f"  mean={sum(v) / len(v):7.1f}  max={max(v):8.1f}ms"
+            )
 
     gcs = [r for r in rows if r["t"] == "gc" and r.get("ms") is not None]
     if gcs:
@@ -135,13 +143,17 @@ def report(path: str = LOG) -> int:
         print("\n  garbage collection:")
         for gen in sorted(by_gen):
             v = by_gen[gen]
-            print(f"    gen{gen}  n={len(v):5d}  total={sum(v):8.1f}ms"
-                  f"  mean={sum(v)/len(v):6.2f}  p99={pct(v,.99):7.1f}  max={max(v):7.1f}ms")
+            print(
+                f"    gen{gen}  n={len(v):5d}  total={sum(v):8.1f}ms"
+                f"  mean={sum(v) / len(v):6.2f}  p99={pct(v, 0.99):7.1f}  max={max(v):7.1f}ms"
+            )
         big = sorted(gcs, key=lambda g: -g["ms"])[:5]
         print("    slowest collections:")
         for g in big:
-            print(f"      gen{g.get('gen')}  {g['ms']:7.1f}ms  "
-                  f"tracked={g.get('tracked')}  collected={g.get('collected')}")
+            print(
+                f"      gen{g.get('gen')}  {g['ms']:7.1f}ms  "
+                f"tracked={g.get('tracked')}  collected={g.get('collected')}"
+            )
 
     slow = [r for r in rows if r["t"] == "stall"]
     if slow:
@@ -150,8 +162,11 @@ def report(path: str = LOG) -> int:
             # was a gc running inside this stall?
             lo, hi = s["ts"] - s["ms"] / 1000, s["ts"]
             inside = [g for g in gcs if lo <= g["ts"] <= hi]
-            tag = (f"  [gc: {len(inside)} colls, {sum(g['ms'] for g in inside):.0f}ms]"
-                   if inside else "")
+            tag = (
+                f"  [gc: {len(inside)} colls, {sum(g['ms'] for g in inside):.0f}ms]"
+                if inside
+                else ""
+            )
             print(f"\n    {s['ms']:7.1f}ms  ({s.get('nsamples', 0)} samples){tag}")
             for st in s.get("stacks", [])[:3]:
                 print(f"        {st}")
@@ -177,11 +192,13 @@ def install() -> None:
     state = {"key_ts": None, "key_name": None, "key_frames": 0, "logged": False}
 
     # ---- 1. writer thread: measure real tty drain + queue depth ----------
-    orig_run = WriterThread.run
 
     def run(self):
         write, flush, get, qsize = (
-            self._file.write, self._file.flush, self._queue.get, self._queue.qsize
+            self._file.write,
+            self._file.flush,
+            self._queue.get,
+            self._queue.qsize,
         )
         while True:
             text = get()
@@ -205,8 +222,7 @@ def install() -> None:
         screen_region = self.size.region
         state["full"] = bool(full or screen_region in self._dirty_regions)
         state["dirty"] = len(self._dirty_regions)
-        return orig_render_update(self, full=full, screen_stack=screen_stack,
-                                  simplify=simplify)
+        return orig_render_update(self, full=full, screen_stack=screen_stack, simplify=simplify)
 
     Compositor.render_update = render_update
 
@@ -244,8 +260,11 @@ def install() -> None:
                 if state["key_ts"] is not None:
                     state["key_frames"] += 1
                     if not state["logged"]:
-                        emit(t="key", key=state["key_name"],
-                             latency_ms=round((time.perf_counter() - state["key_ts"]) * 1000, 3))
+                        emit(
+                            t="key",
+                            key=state["key_name"],
+                            latency_ms=round((time.perf_counter() - state["key_ts"]) * 1000, 3),
+                        )
                         state["logged"] = True
 
     tapp.App._display = _display
@@ -277,8 +296,7 @@ def install() -> None:
         finally:
             dt = (time.perf_counter() - t0) * 1000
             if dt > 1.0:
-                emit(t="render", widget=type(self).__name__, ms=round(dt, 3),
-                     h=crop.height)
+                emit(t="render", widget=type(self).__name__, ms=round(dt, 3), h=crop.height)
 
     Widget.render_lines = render_lines
 
@@ -299,8 +317,12 @@ def install() -> None:
         try:
             return orig_run_mu(self, args, capture_output)
         finally:
-            emit(t="mu", cmd=" ".join(args[:3]),
-                 ms=round((time.perf_counter() - t0) * 1000, 1), main=_on_main())
+            emit(
+                t="mu",
+                cmd=" ".join(args[:3]),
+                ms=round((time.perf_counter() - t0) * 1000, 1),
+                main=_on_main(),
+            )
 
     bor_mu.MuInterface._run_mu = _run_mu
 
@@ -311,8 +333,7 @@ def install() -> None:
         try:
             return orig_view(self, path, mark_as_read, msgid)
         finally:
-            emit(t="muview", ms=round((time.perf_counter() - t0) * 1000, 1),
-                 main=_on_main())
+            emit(t="muview", ms=round((time.perf_counter() - t0) * 1000, 1), main=_on_main())
 
     bor_mu.MuInterface.view = view
 
@@ -326,9 +347,14 @@ def install() -> None:
             gc_state["t0"] = time.perf_counter()
         else:
             dt = (time.perf_counter() - gc_state["t0"]) * 1000
-            emit(t="gc", gen=info.get("generation"), ms=round(dt, 3),
-                 collected=info.get("collected"), uncollectable=info.get("uncollectable"),
-                 tracked=len(gc.get_objects()) if dt > 50 else None)
+            emit(
+                t="gc",
+                gen=info.get("generation"),
+                ms=round(dt, 3),
+                collected=info.get("collected"),
+                uncollectable=info.get("uncollectable"),
+                tracked=len(gc.get_objects()) if dt > 50 else None,
+            )
 
     gc.callbacks.append(gc_cb)
 
@@ -344,13 +370,15 @@ def install() -> None:
         while True:
             fr = sys._current_frames().get(main_ident)
             if fr is not None:
-                ring.append((
-                    time.perf_counter(),
-                    " <- ".join(
-                        f"{f.filename.rsplit('/', 1)[-1]}:{f.lineno}:{f.name}"
-                        for f in reversed(traceback.extract_stack(fr)[-14:])
-                    ),
-                ))
+                ring.append(
+                    (
+                        time.perf_counter(),
+                        " <- ".join(
+                            f"{f.filename.rsplit('/', 1)[-1]}:{f.lineno}:{f.name}"
+                            for f in reversed(traceback.extract_stack(fr)[-14:])
+                        ),
+                    )
+                )
                 del ring[:-400]
             time.sleep(0.01)
 
@@ -366,8 +394,7 @@ def install() -> None:
             if gap > 80:
                 # what was the main thread doing during the gap?
                 during = [s for ts, s in ring if last <= ts <= now]
-                emit(t="stall", ms=round(gap, 1), nsamples=len(during),
-                     stacks=during[:6])
+                emit(t="stall", ms=round(gap, 1), nsamples=len(during), stacks=during[:6])
             last = now
             loop.call_later(0.02, tick)
 
@@ -389,6 +416,7 @@ def main(argv: list[str] | None = None) -> int:
         return report()
     install()
     from bor.app import main as bor_main
+
     print(f"[bor.profiling] logging to {LOG}", file=sys.stderr)
     return bor_main(args)
 

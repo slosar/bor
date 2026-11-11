@@ -7,16 +7,15 @@ Runs an external synchronization command and displays output.
 from __future__ import annotations
 
 import asyncio
-import subprocess
 import shlex
-from typing import Optional
 
-from textual import events, work
+from rich.text import Text
+from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Vertical, ScrollableContainer
-from textual.widgets import Static, Label, Log
+from textual.containers import Container, Vertical
 from textual.reactive import reactive
+from textual.widgets import Label, Log
 
 from bor.tabs.base import BaseTab
 
@@ -67,7 +66,7 @@ class SyncWidget(BaseTab):
     """
 
     running: reactive[bool] = reactive(False)
-    exit_code: reactive[Optional[int]] = reactive(None)
+    exit_code: reactive[int | None] = reactive(None)
 
     def __init__(self, command: str, *args, **kwargs) -> None:
         """
@@ -78,13 +77,13 @@ class SyncWidget(BaseTab):
         """
         super().__init__(*args, **kwargs)
         self.command = command
-        self._process: Optional[asyncio.subprocess.Process] = None
+        self._process: asyncio.subprocess.Process | None = None
 
     def compose(self) -> ComposeResult:
         """Create the widget layout."""
         with Vertical():
             with Container(classes="header-bar"):
-                yield Label(f"Running: {self.command}", id="command-label")
+                yield Label(Text(f"Running: {self.command}"), id="command-label")
             yield SyncOutput(id="output")
             with Container(classes="status-bar"):
                 yield Label("Starting...", id="status-label")
@@ -137,14 +136,12 @@ class SyncWidget(BaseTab):
                 status.update("✓ Completed successfully")
                 output.write_line("\n--- Sync completed successfully ---")
 
-                # Re-index after successful sync
+                # Re-index and refresh the message list. (This used to run
+                # `mu index` here and again in the refresh, both on the UI thread.)
                 output.write_line("\nRunning mu index...")
-                self.bor_app.mu.index()
-                output.write_line("Index updated.")
-                
-                # Refresh the message index if it exists
                 await self._refresh_message_index()
-                
+                output.write_line("Index updated.")
+
                 # Close this tab after successful sync
                 self.close_tab()
             else:
@@ -156,7 +153,7 @@ class SyncWidget(BaseTab):
             output.write_line(f"Error: Command not found: {self.command}")
 
         except Exception as e:
-            status.update(f"✗ Error: {e}")
+            status.update(Text(f"✗ Error: {e}"))
             output.write_line(f"Error: {e}")
 
         finally:
@@ -164,17 +161,17 @@ class SyncWidget(BaseTab):
             self._process = None
 
     async def _refresh_message_index(self) -> None:
-        """Refresh the message index tab if it exists."""
+        """Run `mu index` and refresh the message index tab."""
+        from bor.tabs.message_index import MessageIndexWidget
+
         try:
-            from bor.tabs.message_index import MessageIndexWidget
-            
-            # Find the message index widget
-            index_widget = self.app.query_one("MessageIndexWidget", MessageIndexWidget)
-            if index_widget:
-                await index_widget.action_refresh()
+            index_widget = self.app.query_one(MessageIndexWidget)
         except Exception:
-            # Message index might not exist or be mounted
-            pass
+            # No index to refresh; still bring mu up to date
+            await asyncio.to_thread(self.bor_app.mu.index)
+            return
+        # action_refresh() runs `mu index` on a worker thread, then re-queries
+        await index_widget.action_refresh()
 
     async def _cancel_sync(self) -> None:
         """Cancel the running sync process."""

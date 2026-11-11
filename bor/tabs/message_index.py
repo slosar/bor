@@ -7,23 +7,27 @@ Displays a list of email messages with navigation and actions.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, List, Optional, Set
+from typing import TYPE_CHECKING
 
+from rich.text import Text
 from textual import events
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Container, Vertical, Horizontal
+from textual.containers import Container, Horizontal, Vertical
 from textual.message import Message
 from textual.widget import Widget
-from textual.widgets import DataTable, Input, Static, Label
-from textual.coordinate import Coordinate
+from textual.widgets import DataTable, Input, Label, Static
 
-from bor.tabs.base import BaseTab
-from bor.mu import EmailMessage
 from bor.config import get_config
-from bor.editing import copy_to_clipboard, kill_input_line
+from bor.editing import kill_input_to_end
+from bor.mu import EmailMessage
+from bor.tabs.base import BaseTab
+
+if TYPE_CHECKING:
+    from bor.mu import MuInterface
 
 
 _HISTORY_FILE = Path.home() / ".local" / "share" / "bor" / "search_history"
@@ -37,8 +41,8 @@ class SearchInput(Input):
         """Initialize search input."""
         super().__init__(*args, placeholder="Search...", **kwargs)
         self._history: list[str] = []
-        self._history_pos: int = -1   # -1 = not browsing; ≥0 = index into _history
-        self._saved_value: str = ""   # typed value saved when history browsing starts
+        self._history_pos: int = -1  # -1 = not browsing; ≥0 = index into _history
+        self._saved_value: str = ""  # typed value saved when history browsing starts
         self._load_history()
 
     # ------------------------------------------------------------------
@@ -49,7 +53,7 @@ class SearchInput(Input):
         try:
             if _HISTORY_FILE.exists():
                 lines = _HISTORY_FILE.read_text(encoding="utf-8").splitlines()
-                self._history = [l for l in lines if l.strip()]
+                self._history = [line for line in lines if line.strip()]
         except Exception:
             pass
 
@@ -99,10 +103,7 @@ class SearchInput(Input):
             event.stop()
 
         elif event.key == "ctrl+k":
-            new_value, new_cursor, killed_text = kill_input_line(self.value, self.cursor_position)
-            copy_to_clipboard(killed_text)
-            self.value = new_value
-            self.cursor_position = new_cursor
+            kill_input_to_end(self)
             event.prevent_default()
             event.stop()
 
@@ -148,7 +149,48 @@ class SearchInput(Input):
             super().__init__()
 
 
-class ConfirmBar(Static):
+class PromptBar(Static):
+    """Base for the one-line prompts docked at the bottom of a tab.
+
+    Showing a prompt takes focus; answering or dismissing it hands focus back
+    to whatever had it before, falling back to the message table.
+    """
+
+    can_focus = True
+
+    def __init__(self, *args, **kwargs) -> None:
+        """Initialize the prompt bar."""
+        super().__init__(*args, **kwargs)
+        self._previous_focus: Widget | None = None
+
+    def _open(self, text: str) -> None:
+        """Show the prompt and take focus."""
+        self._previous_focus = self.app.focused
+        self.update(text)
+        self.add_class("visible")
+        self.focus()
+
+    def _close(self) -> None:
+        """Hide the prompt and return focus."""
+        self.remove_class("visible")
+        self._restore_focus()
+
+    def _restore_focus(self) -> None:
+        """Return focus to the widget that opened the prompt."""
+        try:
+            if self._previous_focus is not None and self._previous_focus is not self:
+                self._previous_focus.focus()
+                return
+        except Exception:
+            pass
+
+        try:
+            self.screen.query_one(DataTable).focus()
+        except Exception:
+            pass
+
+
+class ConfirmBar(PromptBar):
     """Confirmation bar widget for y/n prompts."""
 
     DEFAULT_CSS = """
@@ -170,39 +212,28 @@ class ConfirmBar(Static):
     def __init__(self, *args, **kwargs) -> None:
         """Initialize confirmation bar."""
         super().__init__(*args, **kwargs)
-        self._callback: Optional[Callable] = None
-        self._prompt: str = ""
+        self._callback: Callable | None = None
 
     def ask(self, prompt: str, callback: Callable) -> None:
         """Show confirmation prompt."""
-        self._prompt = prompt
         self._callback = callback
-        self.update(f"{prompt} (y/n)")
-        self.add_class("visible")
-        self.focus()
+        self._open(f"{prompt} (y/n)")
 
     def on_key(self, event: events.Key) -> None:
         """Handle key events."""
         if event.key in ("y", "Y"):
-            self.remove_class("visible")
+            self._close()
             if self._callback:
                 self._callback()
             event.prevent_default()
             event.stop()
         elif event.key in ("n", "N", "escape"):
-            self.remove_class("visible")
-            # Return focus to table
-            try:
-                self.screen.query_one(DataTable).focus()
-            except Exception:
-                pass
+            self._close()
             event.prevent_default()
             event.stop()
 
-    can_focus = True
 
-
-class ReplyBar(Static):
+class ReplyBar(PromptBar):
     """Reply options bar widget for (a)ll or (s)ender only choices."""
 
     DEFAULT_CSS = """
@@ -224,47 +255,27 @@ class ReplyBar(Static):
     def __init__(self, *args, **kwargs) -> None:
         """Initialize reply bar."""
         super().__init__(*args, **kwargs)
-        self._callback: Optional[Callable] = None
-        self._cancel_callback: Optional[Callable[[], None]] = None
-        self._previous_focus: Optional[Widget] = None
+        self._callback: Callable | None = None
+        self._cancel_callback: Callable[[], None] | None = None
 
-    def ask(self, callback: Callable, cancel_callback: Optional[Callable[[], None]] = None) -> None:
+    def ask(self, callback: Callable, cancel_callback: Callable[[], None] | None = None) -> None:
         """Show reply options prompt."""
         self._callback = callback
         self._cancel_callback = cancel_callback
-        self._previous_focus = self.app.focused
-        self.update("Reply to: (a)ll or (s)ender only?")
-        self.add_class("visible")
-        self.focus()
-
-    def _restore_focus(self) -> None:
-        """Return focus to the widget that opened the reply prompt."""
-        try:
-            if self._previous_focus is not None and self._previous_focus is not self:
-                self._previous_focus.focus()
-                return
-        except Exception:
-            pass
-
-        try:
-            self.screen.query_one(DataTable).focus()
-        except Exception:
-            pass
+        self._open("Reply to: (a)ll or (s)ender only?")
 
     def on_key(self, event: events.Key) -> None:
         """Handle key events."""
         key = event.key.lower() if event.key else ""
 
         if key in ("a", "s"):
-            self.remove_class("visible")
-            self._restore_focus()
+            self._close()
             if self._callback:
                 self._callback(key == "a")  # True for reply all, False for sender only
             self._callback = None
             self._cancel_callback = None
         elif key == "escape":
-            self.remove_class("visible")
-            self._restore_focus()
+            self._close()
             if self._cancel_callback:
                 self._cancel_callback()
             self._callback = None
@@ -273,10 +284,8 @@ class ReplyBar(Static):
         event.prevent_default()
         event.stop()
 
-    can_focus = True
 
-
-class FlagBar(Static):
+class FlagBar(PromptBar):
     """Flag selection bar widget for applying flags to messages."""
 
     DEFAULT_CSS = """
@@ -298,14 +307,14 @@ class FlagBar(Static):
     def __init__(self, *args, **kwargs) -> None:
         """Initialize flag bar."""
         super().__init__(*args, **kwargs)
-        self._callback: Optional[Callable] = None
+        self._callback: Callable | None = None
 
     def ask(self, callback: Callable) -> None:
         """Show flag selection prompt."""
         self._callback = callback
-        self.update("Apply flag: (U)nread, (N)ew, (F)lagged | Shift+key to remove flag | (Esc) Cancel")
-        self.add_class("visible")
-        self.focus()
+        self._open(
+            "Apply flag: (U)nread, (N)ew, (F)lagged | Shift+key to remove flag | (Esc) Cancel"
+        )
 
     def on_key(self, event: events.Key) -> None:
         """Handle key events."""
@@ -314,26 +323,86 @@ class FlagBar(Static):
 
         # Check for shift+key (uppercase) to remove flag
         if char in ("U", "N", "F"):
-            self.remove_class("visible")
+            self._close()
             if self._callback:
                 # Pass uppercase to indicate removal
                 self._callback(char)
         elif key in ("u", "n", "f"):
-            self.remove_class("visible")
+            self._close()
             if self._callback:
                 self._callback(key)
         elif key == "escape":
-            self.remove_class("visible")
-            # Return focus to table
-            try:
-                self.screen.query_one(DataTable).focus()
-            except Exception:
-                pass
+            self._close()
 
         event.prevent_default()
         event.stop()
 
-    can_focus = True
+
+class MessageTable(DataTable):
+    """The message list table, where Home/End go to the first/last message.
+
+    DataTable binds Home/End to horizontal scrolling. As the focused widget
+    its bindings win, so the index's own Home/End bindings never ran.
+    """
+
+    def action_scroll_home(self) -> None:
+        """Move the cursor to the first message."""
+        self.action_scroll_top()
+
+    def action_scroll_end(self) -> None:
+        """Move the cursor to the last message."""
+        self.action_scroll_bottom()
+
+
+def apply_flag(mu: MuInterface, path: str, flags: list[str], flag_key: str) -> None:
+    """Apply a FlagBar choice to a message file and its in-memory flag list.
+
+    Lowercase u/n/f adds unread/new/flagged; uppercase removes it. `path` is
+    the maildir file to rename; `flags` is updated in place so the index row
+    can be redrawn without a new mu query.
+    """
+    is_remove = flag_key.isupper()
+    flag_lower = flag_key.lower()
+
+    if flag_lower == "u":
+        if is_remove:
+            # Mark as read (remove unread)
+            mu.mark_read(path)
+            if "unread" in flags:
+                flags.remove("unread")
+            if "seen" not in flags:
+                flags.append("seen")
+        else:
+            # Mark as unread
+            mu.mark_unread(path)
+            if "unread" not in flags:
+                flags.append("unread")
+            if "seen" in flags:
+                flags.remove("seen")
+    elif flag_lower == "n":
+        if is_remove:
+            # Remove new flag
+            mu.mark_read(path)
+            if "new" in flags:
+                flags.remove("new")
+        else:
+            # Mark as new
+            mu.mark_unread(path)
+            if "new" not in flags:
+                flags.append("new")
+            if "unread" not in flags:
+                flags.append("unread")
+    elif flag_lower == "f":
+        if is_remove:
+            # Remove flagged
+            mu.mark_flagged(path, False)
+            if "flagged" in flags:
+                flags.remove("flagged")
+        else:
+            # Mark as flagged/important
+            mu.mark_flagged(path, True)
+            if "flagged" not in flags:
+                flags.append("flagged")
 
 
 class MessageIndexWidget(BaseTab):
@@ -354,13 +423,12 @@ class MessageIndexWidget(BaseTab):
         Binding("space", "page_down", "Page Down", show=False),
         Binding("home", "scroll_home", "Top", show=False),
         Binding("end", "scroll_end", "Bottom", show=False),
-
         # Actions
         Binding("enter", "open_message", "Open"),
         Binding("r", "reply", "Reply"),
         Binding("f", "forward", "Forward"),
         Binding("c", "compose", "Compose"),
-        #Binding("ctrl+f", "incremental_search", "Search"),  ## implement when we have a better idea what exactly
+        # Binding("ctrl+f", "incremental_search", "Search"),  ## implement when we have a better idea what exactly
         Binding("s", "mu_search", "Mu Search"),
         Binding("i", "show_inbox", "Inbox"),
         Binding("o", "show_archive", "Archive"),
@@ -437,19 +505,21 @@ class MessageIndexWidget(BaseTab):
     def __init__(self, *args, **kwargs) -> None:
         """Initialize the message index widget."""
         super().__init__(*args, **kwargs)
-        self.messages: List[EmailMessage] = []
-        self.marked_messages: Set[int] = set()
+        self.messages: list[EmailMessage] = []
+        self.marked_messages: set[int] = set()
         self.current_query: str = ""
+        # Message whose thread is shown (Ctrl+T); None when showing current_query
+        self._thread_anchor: EmailMessage | None = None
         self.threading_enabled: bool = get_config().threading.enabled
         self._search_visible: bool = False
-        self._pending_action: Optional[Callable] = None
+        self._pending_action: Callable | None = None
 
     def compose(self) -> ComposeResult:
         """Create the widget layout."""
         with Vertical():
             with Container(classes="search-bar", id="search-bar"):
                 yield SearchInput(id="search-input")
-            yield DataTable(id="message-table", cursor_type="row")
+            yield MessageTable(id="message-table", cursor_type="row")
             yield ConfirmBar("", classes="confirm-bar", id="confirm-bar")
             yield FlagBar("", id="flag-bar")
             yield ReplyBar("", id="reply-bar")
@@ -470,7 +540,7 @@ class MessageIndexWidget(BaseTab):
         table.cursor_type = "row"
         table.zebra_stripes = True
 
-    async def search(self, query: str, threads: Optional[bool] = None) -> None:
+    async def search(self, query: str, threads: bool | None = None) -> None:
         """
         Search for messages and display results.
 
@@ -482,6 +552,7 @@ class MessageIndexWidget(BaseTab):
         use_threads = threads if threads is not None else self.threading_enabled
 
         self.current_query = query
+        self._thread_anchor = None
         # `mu find` spawns a subprocess and takes ~40ms on a large index, which
         # is long enough to be felt as a stall if it runs on the event loop.
         self.messages = await asyncio.to_thread(
@@ -501,7 +572,7 @@ class MessageIndexWidget(BaseTab):
         # Update status
         self._update_status()
 
-    def _find_messages(self, query: str, use_threads: bool, maxnum: int) -> List[EmailMessage]:
+    def _find_messages(self, query: str, use_threads: bool, maxnum: int) -> list[EmailMessage]:
         """Run a mu query. Runs on a worker thread.
 
         Waits for any queued reindexing first, so a search issued right after
@@ -513,8 +584,6 @@ class MessageIndexWidget(BaseTab):
 
     async def _refresh_table(self) -> None:
         """Refresh the message table with current messages."""
-        from rich.text import Text
-        
         table = self.query_one(DataTable)
         table.clear()
 
@@ -524,63 +593,66 @@ class MessageIndexWidget(BaseTab):
         thread_prefixes = self._compute_thread_prefixes(self.messages)
 
         for idx, msg in enumerate(self.messages):
-            # Format date
-            date_str = self._format_date(msg.date, config)
+            cells = self._row_cells(idx, msg, config, thread_prefixes)
+            table.add_row(*cells, key=str(idx))
 
-            # Format from
-            from_str = msg.from_addr.name or msg.from_addr.email
-            if len(from_str) > config.display.from_width:
-                from_str = from_str[:config.display.from_width - 1] + "…"
+    def _row_cells(
+        self, idx: int, msg: EmailMessage, config, thread_prefixes: dict
+    ) -> tuple[Text, Text, Text, Text]:
+        """Build the flags, date, from and subject cells for one message row.
 
-            # Format subject with threading tree prefix
-            subject = msg.subject
-            if idx in thread_prefixes and thread_prefixes[idx]:
-                subject = f"{thread_prefixes[idx]} {subject}"
+        Every cell is a Text: DataTable parses plain-string cells as markup,
+        which hid subjects such as "[mu-discuss] ..." and crashed on "[/x]".
+        """
+        date_str = self._format_date(msg.date, config)
 
-            # Determine text styling based on message state.
-            style = ""
-            if msg.is_flagged:
-                style = f"bold {config.colors.important}"
-            elif msg.is_unread:
-                style = f"bold {config.colors.unread}"
+        from_str = msg.from_addr.name or msg.from_addr.email
+        if len(from_str) > config.display.from_width:
+            from_str = from_str[: config.display.from_width - 1] + "…"
 
-            # Create styled text for each cell
-            flags_text = self._flags_text(msg, config, marked=idx in self.marked_messages, base_style=style)
-            if style:
-                date_text = Text(date_str, style=style)
-                from_text = Text(from_str, style=style)
-                subject_text = Text(subject, style=style)
-            else:
-                date_text = date_str
-                from_text = from_str
-                subject_text = subject
+        # Subject with threading tree prefix
+        subject = msg.subject
+        if thread_prefixes.get(idx):
+            subject = f"{thread_prefixes[idx]} {subject}"
 
-            # Add row
-            row_key = str(idx)
-            table.add_row(flags_text, date_text, from_text, subject_text, key=row_key)
+        style = ""
+        if msg.is_flagged:
+            style = f"bold {config.colors.important}"
+        elif msg.is_unread:
+            style = f"bold {config.colors.unread}"
 
-    def _compute_thread_prefixes(self, messages: List[EmailMessage]) -> dict:
+        flags_text = self._flags_text(
+            msg, config, marked=idx in self.marked_messages, base_style=style
+        )
+        return (
+            flags_text,
+            Text(date_str, style=style),
+            Text(from_str, style=style),
+            Text(subject, style=style),
+        )
+
+    def _compute_thread_prefixes(self, messages: list[EmailMessage]) -> dict:
         """
         Compute tree prefixes for thread visualization.
-        
+
         Returns a dict mapping message index to its tree prefix string,
         e.g., "│ └" or "├" like mu4e displays.
         """
         if not messages:
             return {}
-        
+
         prefixes = {}
         n = len(messages)
-        
+
         for idx, msg in enumerate(messages):
             level = msg.thread_level
             if level == 0:
                 prefixes[idx] = ""
                 continue
-            
+
             # Build the prefix by looking at each level
             prefix_parts = []
-            
+
             for lvl in range(1, level + 1):
                 if lvl == level:
                     # This is the connector for this message
@@ -595,7 +667,7 @@ class MessageIndexWidget(BaseTab):
                             # There's a sibling after us
                             is_last = False
                             break
-                    
+
                     prefix_parts.append("└" if is_last else "├")
                 else:
                     # This is a vertical connector from an ancestor level
@@ -613,11 +685,11 @@ class MessageIndexWidget(BaseTab):
                         # If future_level > lvl, it's a deeper nesting, keep looking
                         if future_level >= lvl:
                             has_continuation = True
-                    
+
                     prefix_parts.append("│" if has_continuation else " ")
-            
+
             prefixes[idx] = "".join(prefix_parts)
-        
+
         return prefixes
 
     def _format_flags(self, msg: EmailMessage, config) -> str:
@@ -637,10 +709,8 @@ class MessageIndexWidget(BaseTab):
 
         return "".join(flags)
 
-    def _flags_text(self, msg: EmailMessage, config, marked: bool, base_style: str) -> "Text":
+    def _flags_text(self, msg: EmailMessage, config, marked: bool, base_style: str) -> Text:
         """Build the flags column cell; the marked symbol is shown in red."""
-        from rich.text import Text
-
         text = Text()
         if marked:
             text.append(config.display.flag_marked, style="red")
@@ -649,7 +719,7 @@ class MessageIndexWidget(BaseTab):
             text.append(flags, style=base_style or None)
         return text
 
-    def _format_date(self, date: Optional[datetime], config) -> str:
+    def _format_date(self, date: datetime | None, config) -> str:
         """Format date for display."""
         if date is None:
             return ""
@@ -670,12 +740,15 @@ class MessageIndexWidget(BaseTab):
     def _update_status(self) -> None:
         """Update the status bar."""
         label = self.query_one("#status-label", Label)
-        threading_status = "threaded" if self.threading_enabled else "flat"
+        if self._thread_anchor is not None:
+            threading_status = "thread view"
+        else:
+            threading_status = "threaded" if self.threading_enabled else "flat"
         marked_count = len(self.marked_messages)
         marked_str = f" | {marked_count} marked" if marked_count > 0 else ""
         label.update(f"{len(self.messages)} messages ({threading_status}){marked_str}")
 
-    def _get_current_message(self) -> Optional[EmailMessage]:
+    def _get_current_message(self) -> EmailMessage | None:
         """Get the currently selected message."""
         table = self.query_one(DataTable)
         if table.cursor_row is not None and 0 <= table.cursor_row < len(self.messages):
@@ -733,12 +806,13 @@ class MessageIndexWidget(BaseTab):
             self.bor_app._current_index = self._get_current_index()
             self.bor_app.open_message(msg)
 
-    def action_reply(self) -> None:
+    async def action_reply(self) -> None:
         """Reply to the selected message."""
         msg = self._get_current_message()
         if msg:
-            # Check if there are multiple recipients - need full message for CC info
-            full_msg = self.bor_app.mu.view(msg.path)
+            # Check if there are multiple recipients - need full message for CC
+            # info. Parsing it (and marking it read) is too slow for the UI thread.
+            full_msg = await asyncio.to_thread(self.bor_app.mu.view, msg.path)
             # Show reply options if there are CC recipients or multiple TO recipients
             if full_msg and (full_msg.cc_addrs or len(full_msg.to_addrs) > 1):
                 reply_bar = self.query_one("#reply-bar", ReplyBar)
@@ -749,7 +823,7 @@ class MessageIndexWidget(BaseTab):
 
     def _do_reply(self, reply_all: bool = False) -> None:
         """Actually open the reply compose."""
-        msg = getattr(self, '_pending_reply_msg', None)
+        msg = getattr(self, "_pending_reply_msg", None)
         if msg:
             self.bor_app.open_compose(reply_to=msg, reply_all=reply_all)
             self._pending_reply_msg = None
@@ -762,8 +836,8 @@ class MessageIndexWidget(BaseTab):
         """Forward the selected message."""
         msg = self._get_current_message()
         if msg:
-            full_msg = self.bor_app.mu.view(msg.path, mark_as_read=False)
-            self.bor_app.open_compose(forward=full_msg or msg)
+            # The compose tab loads the full message (body, attachments) itself
+            self.bor_app.open_compose(forward=msg)
 
     def action_compose(self) -> None:
         """Compose a new message."""
@@ -773,7 +847,7 @@ class MessageIndexWidget(BaseTab):
         """Show incremental search input."""
         # this should not be called
         raise NotImplementedError("Incremental search not implemented yet")
-    
+
     async def on_search_input_submitted(self, event: SearchInput.Submitted) -> None:
         """Handle search submission."""
         search_bar = self.query_one("#search-bar")
@@ -819,18 +893,18 @@ class MessageIndexWidget(BaseTab):
         """Refresh the message index (re-run current search after mu index)."""
         status = self.query_one("#status-label", Label)
         status.update("Updating index...")
-        
-        # Run mu index
-        self.bor_app.mu.index()
-        
+
+        # Run mu index (seconds on a large maildir; keep it off the UI thread)
+        await asyncio.to_thread(self.bor_app.mu.index)
+
         # Re-run current search
-        if self.current_query:
-            await self.search(self.current_query)
+        if self._thread_anchor is not None or self.current_query:
+            await self.rerun_view()
         else:
             # Default to inbox
             config = get_config()
             await self.search(f'maildir:"{config.folders.inbox}"')
-        
+
         status.update(f"Index updated - {len(self.messages)} messages")
 
     async def refresh_current_view(self) -> None:
@@ -838,8 +912,8 @@ class MessageIndexWidget(BaseTab):
         current_index = self._get_current_index()
         marked_ids = self._capture_marked_message_ids()
 
-        if self.current_query:
-            await self.search(self.current_query)
+        if self._thread_anchor is not None or self.current_query:
+            await self.rerun_view()
         else:
             config = get_config()
             await self.search(f'maildir:"{config.folders.inbox}"')
@@ -891,61 +965,22 @@ class MessageIndexWidget(BaseTab):
 
     def _update_row_style(self, idx: int) -> None:
         """Update the styling of a single row."""
-        from rich.text import Text
-        
         if idx < 0 or idx >= len(self.messages):
             return
-            
-        msg = self.messages[idx]
+
         config = get_config()
         table = self.query_one(DataTable)
+        cells = self._row_cells(
+            idx, self.messages[idx], config, self._compute_thread_prefixes(self.messages)
+        )
 
-        date_str = self._format_date(msg.date, config)
-        from_str = msg.from_addr.name or msg.from_addr.email
-        if len(from_str) > config.display.from_width:
-            from_str = from_str[:config.display.from_width - 1] + "…"
-        
-        # Format subject with threading tree prefix
-        thread_prefixes = self._compute_thread_prefixes(self.messages)
-        subject = msg.subject
-        if idx in thread_prefixes and thread_prefixes[idx]:
-            subject = f"{thread_prefixes[idx]} {subject}"
-        
-        # Determine text styling.
-        style = ""
-        if msg.is_flagged:
-            style = f"bold {config.colors.important}"
-        elif msg.is_unread:
-            style = f"bold {config.colors.unread}"
-        
-        # Create styled text using Rich Style for explicit color control
-        from rich.style import Style as RichStyle
-        flags_text = self._flags_text(msg, config, marked=idx in self.marked_messages, base_style=style)
-        if style:
-            rich_style = RichStyle.parse(style)
-            date_text = Text(date_str, style=rich_style)
-            from_text = Text(from_str, style=rich_style)
-            subject_text = Text(subject, style=rich_style)
-        else:
-            date_text = Text(date_str)
-            from_text = Text(from_str)
-            subject_text = Text(subject)
-        
-        # Update the row in place
-        row_key = str(idx)
         # DataTable doesn't have direct row update, so we update cell by cell
         try:
-            # Get the coordinate for each cell and update
             from textual.coordinate import Coordinate
-            
-            # Get row index in the table
-            row_idx = table.get_row_index(row_key)
-            
-            # Update each column by coordinate
-            table.update_cell_at(Coordinate(row_idx, 0), flags_text, update_width=False)
-            table.update_cell_at(Coordinate(row_idx, 1), date_text, update_width=False)
-            table.update_cell_at(Coordinate(row_idx, 2), from_text, update_width=False)
-            table.update_cell_at(Coordinate(row_idx, 3), subject_text, update_width=False)
+
+            row_idx = table.get_row_index(str(idx))
+            for column, cell in enumerate(cells):
+                table.update_cell_at(Coordinate(row_idx, column), cell, update_width=False)
             # Force visual refresh
             self.refresh(layout=True)
         except Exception:
@@ -969,21 +1004,14 @@ class MessageIndexWidget(BaseTab):
         """Archive marked messages or current message with confirmation."""
         if self.marked_messages:
             count = len(self.marked_messages)
-            self._confirm_action(
-                f"Archive {count} marked message(s)?",
-                self._do_archive
-            )
+            self._confirm_action(f"Archive {count} marked message(s)?", self._do_archive)
         else:
             msg = self._get_current_message()
             if msg:
-                self._confirm_action(
-                    f"Archive this message?",
-                    self._do_archive
-                )
+                self._confirm_action("Archive this message?", self._do_archive)
 
     def _do_archive(self) -> None:
         """Actually perform the archive operation."""
-        import asyncio
         asyncio.create_task(self._do_archive_async())
 
     async def _do_archive_async(self) -> None:
@@ -1011,7 +1039,7 @@ class MessageIndexWidget(BaseTab):
                 self.bor_app.mu.move(msg.path, archive_folder)
 
         # Refresh the list
-        await self.search(self.current_query)
+        await self.rerun_view()
         self._restore_cursor(desired_index)
         self.query_one(DataTable).focus()
 
@@ -1022,13 +1050,12 @@ class MessageIndexWidget(BaseTab):
 
     def _do_apply_flag(self, flag_key: str) -> None:
         """Actually apply the selected flag."""
-        import asyncio
         asyncio.create_task(self._do_apply_flag_async(flag_key))
 
     async def _do_apply_flag_async(self, flag_key: str) -> None:
         """Async flag application. Uppercase = remove, lowercase = add."""
         messages_to_flag = []
-        
+
         if self.marked_messages:
             for idx in self.marked_messages:
                 if 0 <= idx < len(self.messages):
@@ -1038,55 +1065,11 @@ class MessageIndexWidget(BaseTab):
             msg = self._get_current_message()
             if msg:
                 messages_to_flag.append((idx, msg))
-        
-        # Check if removing (uppercase) or adding (lowercase)
-        is_remove = flag_key.isupper()
-        flag_lower = flag_key.lower()
-        
+
         for idx, msg in messages_to_flag:
-            if flag_lower == "u":
-                if is_remove:
-                    # Mark as read (remove unread)
-                    self.bor_app.mu.mark_read(msg.path)
-                    if "unread" in msg.flags:
-                        msg.flags.remove("unread")
-                    if "seen" not in msg.flags:
-                        msg.flags.append("seen")
-                else:
-                    # Mark as unread
-                    self.bor_app.mu.mark_unread(msg.path)
-                    if "unread" not in msg.flags:
-                        msg.flags.append("unread")
-                    if "seen" in msg.flags:
-                        msg.flags.remove("seen")
-            elif flag_lower == "n":
-                if is_remove:
-                    # Remove new flag
-                    self.bor_app.mu.mark_read(msg.path)
-                    if "new" in msg.flags:
-                        msg.flags.remove("new")
-                else:
-                    # Mark as new
-                    self.bor_app.mu.mark_unread(msg.path)
-                    if "new" not in msg.flags:
-                        msg.flags.append("new")
-                    if "unread" not in msg.flags:
-                        msg.flags.append("unread")
-            elif flag_lower == "f":
-                if is_remove:
-                    # Remove flagged
-                    self.bor_app.mu.mark_flagged(msg.path, False)
-                    if "flagged" in msg.flags:
-                        msg.flags.remove("flagged")
-                else:
-                    # Mark as flagged/important
-                    self.bor_app.mu.mark_flagged(msg.path, True)
-                    if "flagged" not in msg.flags:
-                        msg.flags.append("flagged")
-            
-            # Update the row display
+            apply_flag(self.bor_app.mu, msg.path, msg.flags, flag_key)
             self._update_row_style(idx)
-        
+
         # Clear marked messages after applying flags
         if self.marked_messages:
             self.marked_messages.clear()
@@ -1097,7 +1080,7 @@ class MessageIndexWidget(BaseTab):
     async def action_undo(self) -> None:
         """Undo the last move operation."""
         if self.bor_app.mu.undo_move():
-            await self.search(self.current_query)
+            await self.rerun_view()
 
     async def action_toggle_threading(self) -> None:
         """Toggle threading on/off."""
@@ -1105,34 +1088,53 @@ class MessageIndexWidget(BaseTab):
         await self.search(self.current_query)
 
     async def action_show_thread(self) -> None:
-        """Show all messages in the current thread."""
+        """Show all messages in the current thread, with the cursor on this one."""
         msg = self._get_current_message()
         if msg:
-            thread_messages = self.bor_app.mu.find_thread(msg)
-            self.messages = thread_messages
-            self.bor_app._current_messages = self.messages
-            await self._refresh_table()
-            self._update_status()
+            await self._show_thread(msg)
+            anchor_id = self._message_identity(msg)
+            for idx, message in enumerate(self.messages):
+                if self._message_identity(message) == anchor_id:
+                    self._restore_cursor(idx)
+                    break
+
+    async def _show_thread(self, anchor: EmailMessage) -> None:
+        """Replace the list with the thread containing `anchor`."""
+        # find_thread() runs several `mu find` passes; keep them off the UI.
+        self.messages = await asyncio.to_thread(self._find_thread, anchor)
+        self._thread_anchor = anchor
+        self.bor_app._current_messages = self.messages
+        self.bor_app._current_index = 0
+        # Marks are row positions in the previous list
+        self.marked_messages.clear()
+        await self._refresh_table()
+        self._update_status()
+
+    def _find_thread(self, anchor: EmailMessage) -> list[EmailMessage]:
+        """Run the thread query. Runs on a worker thread."""
+        mu = self.bor_app.mu
+        mu.wait_for_reindex()
+        return mu.find_thread(anchor)
+
+    async def rerun_view(self) -> None:
+        """Re-run whatever the list shows: the thread view or the current query."""
+        if self._thread_anchor is not None:
+            await self._show_thread(self._thread_anchor)
+        else:
+            await self.search(self.current_query)
 
     def action_delete(self) -> None:
         """Delete marked messages or current message with confirmation."""
         if self.marked_messages:
             count = len(self.marked_messages)
-            self._confirm_action(
-                f"Delete {count} marked message(s)?",
-                self._do_delete
-            )
+            self._confirm_action(f"Delete {count} marked message(s)?", self._do_delete)
         else:
             msg = self._get_current_message()
             if msg:
-                self._confirm_action(
-                    f"Delete this message?",
-                    self._do_delete
-                )
+                self._confirm_action("Delete this message?", self._do_delete)
 
     def _do_delete(self) -> None:
         """Actually perform the delete operation."""
-        import asyncio
         asyncio.create_task(self._do_delete_async())
 
     async def _do_delete_async(self) -> None:
@@ -1150,7 +1152,7 @@ class MessageIndexWidget(BaseTab):
             if msg:
                 self.bor_app.mu.move(msg.path, config.folders.trash)
 
-        await self.search(self.current_query)
+        await self.rerun_view()
         self.query_one(DataTable).focus()
 
     def action_edit_draft(self) -> None:

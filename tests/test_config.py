@@ -152,3 +152,85 @@ def test_apply_config_overrides_invalid_key_errors():
 
     with pytest.raises(ValueError):
         apply_config_overrides(config, ["general.unknown=1"])
+
+
+def test_unknown_option_is_skipped_not_fatal():
+    """A misspelled option must not throw away the rest of the configuration."""
+    config = Config.from_dict(
+        {
+            "general": {"max_messages": 50, "max_mesages": 10},
+            "colors": {"flagged": "red", "unread": "green"},
+        }
+    )
+
+    assert config.general.max_messages == 50
+    assert config.colors.unread == "green"
+    assert config.warnings == [
+        "Unknown config option general.max_mesages ignored",
+        "Unknown config option colors.flagged ignored",
+    ]
+
+
+def test_unknown_and_malformed_sections_are_reported():
+    config = Config.from_dict({"keybindings": {"x": "y"}, "general": 5, "aliases": {"r": "Hi"}})
+
+    assert config.aliases == {"r": "Hi"}
+    assert config.general.max_messages == 400
+    assert config.warnings == [
+        "Unknown config section [keybindings] ignored",
+        "[general] must be a table; using defaults",
+    ]
+
+
+def test_warnings_is_not_a_config_section():
+    config = Config.from_dict({"warnings": {"a": 1}})
+
+    assert config.warnings == ["Unknown config section [warnings] ignored"]
+
+
+def test_unparseable_file_reports_warning(tmp_path):
+    path = tmp_path / "bor.conf"
+    path.write_text("[general\nmax_messages = 1\n")
+
+    config = load_config(path)
+
+    assert config.general.max_messages == 400
+    assert len(config.warnings) == 1
+    assert config.warnings[0].startswith(f"Could not load {path}:")
+
+
+async def test_app_shows_config_warnings():
+    from unittest.mock import MagicMock, patch
+
+    from bor.app import BorApp
+
+    config = Config.from_dict({"general": {"theme": "no-such-theme", "bogus": 1}})
+    mu = MagicMock()
+    mu.find.return_value = []
+    with patch("bor.app.get_config", return_value=config):
+        with patch("bor.app.MuInterface", return_value=mu):
+            with patch.object(BorApp, "notify") as notify:
+                app = BorApp()
+                async with app.run_test() as pilot:
+                    await pilot.pause()
+
+    shown = [call.args[0] for call in notify.call_args_list]
+    assert "Unknown config option general.bogus ignored" in shown
+    assert "Unknown theme 'no-such-theme'; using 'textual-dark'" in shown
+
+
+def test_invalid_row_colors_fall_back_to_defaults():
+    config = Config.from_dict({"colors": {"important": "orange", "unread": "#00ff00"}})
+
+    assert config.colors.important == "dark_orange"
+    assert config.colors.unread == "#00ff00"
+    assert config.warnings == ["Invalid color 'orange' for colors.important; using 'dark_orange'"]
+
+
+def test_invalid_color_override_falls_back_to_default():
+    config = Config()
+
+    apply_config_overrides(config, ["colors.unread=nocolor"])
+
+    assert config.colors.unread == "blue"
+    assert config.warnings == ["Invalid color 'nocolor' for colors.unread; using 'blue'"]
