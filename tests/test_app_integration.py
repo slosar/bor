@@ -769,7 +769,7 @@ class TestQuit:
                         compose.query_one("#to-input").value = "to@example.com"
                         compose.attachments = [tmp_path / "gone.pdf"]
                         with patch.object(ComposeWidget, "notify") as notify:
-                            assert compose._send_message() is False
+                            assert await compose._send_message() is False
                             assert compose._save_draft() is False
 
         sendmail.assert_not_called()

@@ -92,11 +92,10 @@ pending paths into a single `remove` and a single `add`. Anything that queries m
 afterwards calls `wait_for_reindex()` first, from its worker thread, so results
 reflect pending changes.
 
-Known exceptions that still call `mu` on the UI thread: reply and forward from
-the index (`view()`), `Ctrl+T` show-thread (`find_thread()`, several `mu find`
-runs), `Ctrl+R` refresh, save-draft and post-sync `mu index`, opening a forward or
-draft in compose, attachment extraction, and the `mu cfind` fallback on Tab in an
-address field.
+`tests/test_ui_thread.py` drives the main flows (reply, forward, refresh,
+thread view, address completion, send, attachments, sync) with a mock `mu` that
+records which thread each call runs on, and fails if any of them runs on the UI
+thread. SMTP delivery also runs on a worker thread, with a timeout.
 
 ### bor/ical.py
 

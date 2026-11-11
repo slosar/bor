@@ -6,6 +6,7 @@ Displays and manages email attachments.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import os
 import subprocess
@@ -454,12 +455,13 @@ class AttachmentsWidget(BaseTab):
             self._temp_dir = Path(tempfile.mkdtemp(prefix="bor_attach_"))
         return self._temp_dir
 
-    def _extract_attachment(self, index: int) -> Path | None:
+    def _extract_attachment(self, index: int, temp_dir: Path) -> Path | None:
         """
-        Extract an attachment to a temporary file.
+        Extract an attachment to a temporary file. Blocking (runs `mu extract`).
 
         Args:
             index: Attachment index (0-based)
+            temp_dir: This tab's temporary directory (from _get_temp_dir())
 
         Returns:
             Path to extracted file, or None on error
@@ -470,11 +472,14 @@ class AttachmentsWidget(BaseTab):
         attach = self.attachments[index]
         # Use the MIME part index from mu, not our list index
         part_index = attach.get("part_index", index + 1)
-        temp_dir = self._get_temp_dir()
+        # One directory per part: extract_attachment() finds the file it wrote
+        # by listing the directory, and an extraction for a preview the user
+        # has already moved past may still be running.
+        part_dir = temp_dir / f"part-{part_index}"
 
         # mu extract returns the actual path of the extracted file
         # (mu may normalize filenames, so we can't assume the exact name)
-        result = self.bor_app.mu.extract_attachment(self.message.path, part_index, str(temp_dir))
+        result = self.bor_app.mu.extract_attachment(self.message.path, part_index, str(part_dir))
 
         if result:
             return Path(result)
@@ -501,26 +506,13 @@ class AttachmentsWidget(BaseTab):
             "application/xml",
         ]:
             # Text-based content - extract and display
-            file_path = self._extract_attachment(index)
-            if file_path:
-                try:
-                    content = file_path.read_text(errors="replace")
-                    preview.show_text(filename, content)
-                except Exception as e:
-                    preview.show_message(f"Error reading file: {e}")
-            else:
-                preview.show_message("Could not extract attachment")
+            self._start_preview(index, "text")
 
         elif content_type.startswith("image/"):
             # Image - try to display inline with Kitty graphics
             config = get_config()
             if config.attachments.use_kitty_icat and self._check_kitty():
-                file_path = self._extract_attachment(index)
-                if file_path:
-                    # Display image inline in the preview area
-                    preview.show_image(filename, file_path)
-                else:
-                    preview.show_message("Could not extract image")
+                self._start_preview(index, "image")
             else:
                 preview.show_message(f"Image: {filename}\n\nPress Enter to open with system viewer")
 
@@ -535,18 +527,51 @@ class AttachmentsWidget(BaseTab):
                 "Press 's' to save to disk"
             )
 
+    def _start_preview(self, index: int, kind: str) -> None:
+        """Extract and show an attachment without blocking cursor movement."""
+        self.query_one("#preview", AttachmentPreview).show_message("Loading...")
+        self.run_worker(
+            self._preview_worker(index, kind, self._get_temp_dir()),
+            group="attachment-preview",
+            exclusive=True,
+        )
+
+    async def _preview_worker(self, index: int, kind: str, temp_dir: Path) -> None:
+        """Extract attachment `index` on a thread, then show it as text or image."""
+        filename = self.attachments[index].get("filename", "attachment")
+        file_path = await asyncio.to_thread(self._extract_attachment, index, temp_dir)
+        if index != self._selected_index:
+            return  # The user has moved on
+
+        preview = self.query_one("#preview", AttachmentPreview)
+        if file_path is None:
+            preview.show_message(
+                "Could not extract image" if kind == "image" else "Could not extract attachment"
+            )
+        elif kind == "image":
+            # Display image inline in the preview area
+            preview.show_image(filename, file_path)
+        else:
+            try:
+                content = await asyncio.to_thread(file_path.read_text, errors="replace")
+            except Exception as e:
+                preview.show_message(f"Error reading file: {e}")
+                return
+            if index == self._selected_index:
+                preview.show_text(filename, content)
+
     def _check_kitty(self) -> bool:
         """Check if we're running in kitty terminal."""
         return _supports_kitty_graphics()
 
-    def _open_with_system(self, index: int) -> None:
+    async def _open_with_system(self, index: int) -> None:
         """
         Open an attachment with the system's default handler.
 
         Args:
             index: Attachment index (0-based)
         """
-        file_path = self._extract_attachment(index)
+        file_path = await asyncio.to_thread(self._extract_attachment, index, self._get_temp_dir())
         if file_path:
             try:
                 # Linux/Unix
@@ -565,7 +590,7 @@ class AttachmentsWidget(BaseTab):
 
     def _save_attachment(self, index: int, target_dir: str | None = None) -> Path | None:
         """
-        Save an attachment to disk.
+        Save an attachment to disk. Blocking (runs `mu extract`).
 
         Args:
             index: Attachment index (0-based)
@@ -619,11 +644,15 @@ class AttachmentsWidget(BaseTab):
 
     def action_open_attachment(self) -> None:
         """Open the selected attachment with system viewer."""
-        self._open_with_system(self._selected_index)
+        self.run_worker(self._open_with_system(self._selected_index), group="attachment-open")
 
     def action_save_attachment(self) -> None:
         """Save the selected attachment."""
-        path = self._save_attachment(self._selected_index)
+        self.run_worker(self._save_selected(self._selected_index), group="attachment-save")
+
+    async def _save_selected(self, index: int) -> None:
+        """Save attachment `index` (on a thread) and report where it went."""
+        path = await asyncio.to_thread(self._save_attachment, index)
         preview = self.query_one("#preview", AttachmentPreview)
         if path:
             preview.show_message(f"Saved to: {path}")
@@ -632,9 +661,15 @@ class AttachmentsWidget(BaseTab):
 
     def action_save_all(self) -> None:
         """Save all attachments."""
+        self.run_worker(self._save_all(), group="attachment-save")
+
+    async def _save_all(self) -> None:
+        """Save every attachment (on a thread) and report how many."""
         config = get_config()
         save_dir = Path(config.attachments.save_directory).expanduser()
-        saved = self.bor_app.mu.extract_all_attachments(self.message.path, str(save_dir))
+        saved = await asyncio.to_thread(
+            self.bor_app.mu.extract_all_attachments, self.message.path, str(save_dir)
+        )
         preview = self.query_one("#preview", AttachmentPreview)
         if saved:
             preview.show_message(f"Saved {len(saved)} file(s) to: {save_dir}")

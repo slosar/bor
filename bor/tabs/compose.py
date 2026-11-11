@@ -33,7 +33,7 @@ from textual.reactive import reactive
 from textual.widgets import Input, Label, ListItem, ListView, Static, TextArea
 from textual.widgets.text_area import Edit, EditResult, Selection
 
-from bor.config import get_config, load_mailrc_aliases
+from bor.config import SmtpConfig, get_config, load_mailrc_aliases
 from bor.editing import copy_to_clipboard, kill_input_to_end, kill_text_line, normalize_newlines
 from bor.mu import EmailAddress, EmailMessage
 from bor.tabs.base import BaseTab
@@ -144,6 +144,10 @@ def _bracketed_msgids(value: str) -> list[str]:
     """
     ids = re.findall(r"<([^<>\s]+)>", value) or value.split()
     return [f"<{mid.strip('<>')}>" for mid in ids if mid.strip("<>")]
+
+
+# Seconds before an unresponsive SMTP server is given up on
+SMTP_TIMEOUT = 60
 
 
 # Second key after Ctrl+L -> command posted to the ComposeWidget
@@ -365,27 +369,44 @@ class AddressInput(InputEditingMixin, HeaderNavigationMixin, CtrlLMixin, Input):
             if prefix_lower in name_lower or prefix_lower in email_lower:
                 completions.append(str(contact))
 
-        # If nothing matched locally, try a targeted mu cfind
-        if not completions and prefix:
-            mu = getattr(self.app, "mu", None)
-            if mu is not None:
-                try:
-                    remote_contacts = mu.find_contacts(pattern=prefix, maxnum=50)
-                except Exception:
-                    remote_contacts = []
-
-                if remote_contacts:
-                    existing_keys = {
-                        ((c.email or "").lower() or (c.name or "").lower()) for c in self._contacts
-                    }
-                    for contact in remote_contacts:
-                        key = (contact.email or "").lower() or (contact.name or "").lower()
-                        if key and key not in existing_keys:
-                            self._contacts.append(contact)
-                            existing_keys.add(key)
-                        completions.append(str(contact))
-
         return completions
+
+    def _apply_completion(self, value: str, start: int, cursor: int) -> None:
+        """Replace value[start:cursor] with the next completion and advance."""
+        completion = self._completions[self._completion_index]
+        self.value = value[:start] + (" " if start > 0 else "") + completion + value[cursor:]
+        self.cursor_position = start + len(completion) + (1 if start > 0 else 0)
+        self._completion_index = (self._completion_index + 1) % len(self._completions)
+
+    async def _complete_from_mu(self, prefix: str, value: str, start: int, cursor: int) -> None:
+        """Complete from a targeted `mu cfind` when no loaded contact matched.
+
+        Runs as a worker: the subprocess takes long enough to stall typing.
+        """
+        mu = getattr(self.app, "mu", None)
+        try:
+            contacts = await asyncio.to_thread(mu.find_contacts, pattern=prefix, maxnum=50)
+        except Exception:
+            contacts = []
+
+        if self.value != value or self.cursor_position != cursor:
+            return  # The user kept typing; this result is stale
+
+        existing_keys = {
+            ((c.email or "").lower() or (c.name or "").lower()) for c in self._contacts
+        }
+        for contact in contacts:
+            key = (contact.email or "").lower() or (contact.name or "").lower()
+            if key and key not in existing_keys:
+                self._contacts.append(contact)
+                existing_keys.add(key)
+
+        self._completions = [str(contact) for contact in contacts]
+        self._completion_index = 0
+        if self._completions:
+            self._apply_completion(value, start, cursor)
+        else:
+            self.screen.focus_next()
 
     # Textual calls _on_key for every class in the MRO, so Input's own key
     # handling runs after this one unless the event's default is prevented.
@@ -428,14 +449,19 @@ class AddressInput(InputEditingMixin, HeaderNavigationMixin, CtrlLMixin, Input):
                     self._completion_index = 0
 
                 if self._completions:
-                    # Insert completion
-                    completion = self._completions[self._completion_index]
-                    new_value = (
-                        value[:start] + (" " if start > 0 else "") + completion + value[cursor:]
+                    self._apply_completion(value, start, cursor)
+                    event.prevent_default()
+                    event.stop()
+                    return
+
+                if getattr(self.app, "mu", None) is not None:
+                    # Nothing loaded matches: ask mu, which completes (or moves
+                    # on to the next field) when the answer arrives.
+                    self.run_worker(
+                        self._complete_from_mu(prefix, value, start, cursor),
+                        group="cfind",
+                        exclusive=True,
                     )
-                    self.value = new_value
-                    self.cursor_position = start + len(completion) + (1 if start > 0 else 0)
-                    self._completion_index = (self._completion_index + 1) % len(self._completions)
                     event.prevent_default()
                     event.stop()
                     return
@@ -1147,6 +1173,7 @@ class ComposeWidget(BaseTab):
         self._file_path_mode: str | None = None
         self._bulk_picker_directory: Path | None = None
         self._draft_deleted: bool = False
+        self._sending: bool = False
         # Threading headers of an edited draft that was itself a reply
         self._draft_in_reply_to: str = ""
         self._draft_references: str = ""
@@ -1253,10 +1280,10 @@ class ComposeWidget(BaseTab):
 
         if self.reply_to:
             self._init_reply()
-        elif self.forward:
-            self._init_forward()
-        elif self.edit_draft:
-            self._init_draft()
+        elif self.forward or self.edit_draft:
+            # Parsing the source message and extracting its attachments
+            # (one mu subprocess each) are too slow for the UI thread.
+            self.run_worker(self._load_source_message(), name="load-source-message")
         else:
             # New message - add signature
             body_input = self.query_one("#body-input", ComposeTextArea)
@@ -1369,17 +1396,40 @@ class ComposeWidget(BaseTab):
             seen_emails,
         )
 
-    def _init_forward(self) -> None:
-        """Initialize content for forward."""
-        msg = self.forward
-        if not msg:
+    async def _load_source_message(self) -> None:
+        """Load the forwarded message or edited draft, then fill the form."""
+        source = self.forward or self.edit_draft
+        full_msg, attachments = await asyncio.to_thread(self._read_source_message, source)
+        if not self.is_mounted:
             return
 
-        # Ensure we have the full message content and attachments
-        full_msg = self.bor_app.mu.view(msg.path, mark_as_read=False)
-        if full_msg:
-            msg = full_msg
-            self.forward = full_msg
+        if self.forward:
+            if full_msg:
+                self.forward = full_msg
+            self._init_forward(full_msg or source)
+        elif full_msg:
+            self._init_draft(full_msg)
+
+        self.attachments.extend(attachments)
+        self._update_attachment_bar()
+
+    def _read_source_message(self, source: EmailMessage) -> tuple[EmailMessage | None, list[Path]]:
+        """Parse a message and extract its attachments. Runs on a worker thread."""
+        full_msg = self.bor_app.mu.view(source.path, mark_as_read=False)
+        # A forward can fall back to what the index knows; a draft cannot
+        msg = full_msg or (source if self.forward else None)
+        if msg is None or not msg.attachments:
+            return full_msg, []
+
+        prefix = "bor-forward-" if self.forward else "bor-draft-"
+        target_dir = Path(tempfile.mkdtemp(prefix=prefix))
+        attachments = self._collect_forward_attachments(
+            msg.path, msg.attachments, target_dir, self.bor_app.mu.extract_attachment
+        )
+        return full_msg, attachments
+
+    def _init_forward(self, msg: EmailMessage) -> None:
+        """Fill subject and body for forwarding `msg`."""
 
         # Set Subject
         subject_input = self.query_one("#subject-input", Input)
@@ -1425,15 +1475,6 @@ class ComposeWidget(BaseTab):
             )
         else:
             body_input.text = header + "\n\n" + config.identity.signature
-
-        # Forward all attachments by extracting them into a temp directory
-        if msg.attachments:
-            target_dir = Path(tempfile.mkdtemp(prefix="bor-forward-"))
-            extracted = self._collect_forward_attachments(
-                msg.path, msg.attachments, target_dir, self.bor_app.mu.extract_attachment
-            )
-            if extracted:
-                self.attachments.extend(extracted)
 
     @staticmethod
     def _collect_forward_attachments(
@@ -1496,16 +1537,8 @@ class ComposeWidget(BaseTab):
 
         return extracted
 
-    def _init_draft(self) -> None:
-        """Initialize content from draft."""
-        msg = self.edit_draft
-        if not msg:
-            return
-
-        # Load full message
-        full_msg = self.bor_app.mu.view(msg.path, mark_as_read=False)
-        if not full_msg:
-            return
+    def _init_draft(self, full_msg: EmailMessage) -> None:
+        """Fill the form from the draft being edited."""
 
         # Set To
         to_input = self.query_one("#to-input", AddressInput)
@@ -1526,18 +1559,6 @@ class ComposeWidget(BaseTab):
         # Set body
         body_input = self.query_one("#body-input", ComposeTextArea)
         body_input.text = normalize_newlines(full_msg.body_txt or "")
-
-        # Keep the draft's attachments
-        if full_msg.attachments:
-            target_dir = Path(tempfile.mkdtemp(prefix="bor-draft-"))
-            self.attachments.extend(
-                self._collect_forward_attachments(
-                    full_msg.path,
-                    full_msg.attachments,
-                    target_dir,
-                    self.bor_app.mu.extract_attachment,
-                )
-            )
 
         # Keep the threading headers of a draft reply
         in_reply_to = _bracketed_msgids(full_msg.in_reply_to or "")
@@ -1751,9 +1772,9 @@ class ComposeWidget(BaseTab):
         part.add_header("Content-Disposition", "attachment", filename=path.name)
         return part
 
-    def _send_message(self) -> bool:
+    async def _send_message(self) -> bool:
         """
-        Send the composed message via SMTP.
+        Send the composed message via SMTP and save a copy to the sent folder.
 
         Returns:
             True if successful
@@ -1762,56 +1783,66 @@ class ComposeWidget(BaseTab):
 
         try:
             msg = self._build_message()
+            recipients = self._envelope_recipients(msg)
+            # Bcc recipients are in the envelope only; the copy saved to the
+            # sent folder below keeps the header as a record.
+            data = self._wire_format(msg)
+            # Network I/O (and a possible keyring unlock prompt) must not
+            # freeze the UI.
+            await asyncio.to_thread(
+                self._smtp_send, config.smtp, config.identity.email, recipients, data
+            )
+        except Exception as e:
+            self.notify(f"Error sending message: {e}", severity="error", markup=False)
+            return False
 
-            # Connect to SMTP server
-            if config.smtp.use_starttls:
-                server = smtplib.SMTP(config.smtp.server, config.smtp.port)
+        self._save_to_folder(config.folders.sent, msg)
+        return True
+
+    @staticmethod
+    def _envelope_recipients(msg: MIMEMultipart) -> list[str]:
+        """All To, CC and BCC addresses (getaddresses handles quoted commas)."""
+        recipients: list[str] = []
+        for header in ("To", "CC", "BCC"):
+            if msg[header]:
+                recipients.extend(addr for _, addr in email.utils.getaddresses([msg[header]]))
+        return [addr for addr in recipients if addr]
+
+    @staticmethod
+    def _smtp_send(smtp: SmtpConfig, from_addr: str, recipients: list[str], data: str) -> None:
+        """Deliver a message over SMTP. Blocking: runs on a worker thread."""
+        if smtp.use_starttls:
+            server = smtplib.SMTP(smtp.server, smtp.port, timeout=SMTP_TIMEOUT)
+        elif smtp.use_tls:
+            server = smtplib.SMTP_SSL(smtp.server, smtp.port, timeout=SMTP_TIMEOUT)
+        else:
+            server = smtplib.SMTP(smtp.server, smtp.port, timeout=SMTP_TIMEOUT)
+
+        try:
+            if smtp.use_starttls:
                 server.starttls()
-            elif config.smtp.use_tls:
-                server = smtplib.SMTP_SSL(config.smtp.server, config.smtp.port)
-            else:
-                server = smtplib.SMTP(config.smtp.server, config.smtp.port)
 
             # Login if credentials provided
-            if config.smtp.username:
-                password = config.smtp.password
+            if smtp.username:
+                password = smtp.password
                 if not password:
                     # Try to get from keyring
                     try:
                         import keyring
 
-                        password = keyring.get_password("bor-email", config.smtp.username)
+                        password = keyring.get_password("bor-email", smtp.username)
                     except Exception:
                         pass
 
                 if password:
-                    server.login(config.smtp.username, password)
+                    server.login(smtp.username, password)
 
-            # Send - extract email addresses properly using email.utils.getaddresses
-            # This correctly handles quoted display names with commas
-            to_addrs = []
-            if msg["To"]:
-                to_addrs.extend([email for name, email in email.utils.getaddresses([msg["To"]])])
-            if msg["CC"]:
-                to_addrs.extend([email for name, email in email.utils.getaddresses([msg["CC"]])])
-            if msg["BCC"]:
-                to_addrs.extend([email for name, email in email.utils.getaddresses([msg["BCC"]])])
-
-            to_addrs = [addr for addr in to_addrs if addr]
-
-            # Bcc recipients are in the envelope only; the copy saved to the
-            # sent folder below keeps the header as a record.
-            server.sendmail(config.identity.email, to_addrs, self._wire_format(msg))
-            server.quit()
-
-            # Copy to sent folder
-            self._save_to_folder(config.folders.sent, msg)
-
-            return True
-
-        except Exception as e:
-            self.notify(f"Error sending message: {e}", severity="error", markup=False)
-            return False
+            server.sendmail(from_addr, recipients, data)
+        finally:
+            try:
+                server.quit()
+            except Exception:
+                pass
 
     @staticmethod
     def _wire_format(msg: MIMEMultipart) -> str:
@@ -1876,9 +1907,17 @@ class ComposeWidget(BaseTab):
 
     # Event handlers for Ctrl+L commands (from any input)
 
-    def on_send_message(self, event: SendMessage) -> None:
+    async def on_send_message(self, event: SendMessage) -> None:
         """Handle send message command."""
-        if self._send_message():
+        if self._sending:
+            return
+        self._sending = True
+        self.notify("Sending...")
+        try:
+            sent = await self._send_message()
+        finally:
+            self._sending = False
+        if sent:
             # Mark original message as replied/forwarded
             if self.reply_to:
                 self.bor_app.mu.mark_replied(self.reply_to.path)
@@ -1891,14 +1930,18 @@ class ComposeWidget(BaseTab):
     def on_save_draft(self, event: SaveDraft) -> None:
         """Handle save draft command."""
         if self._save_draft():
+            # _save_to_folder() queued the new file for indexing, and the
+            # refresh waits for that; no full `mu index` needed.
             self._retire_original_draft()
-            self.bor_app.mu.index()
             self._refresh_index_after_draft_change()
             self.notify("Draft saved!")
             self.close_tab()
 
     def on_cancel_compose(self, event: CancelCompose) -> None:
         """Handle cancel compose command: confirm, then close without saving."""
+        if self._sending:
+            self.notify("Still sending; wait for it to finish", severity="warning")
+            return
         if self.edit_draft:
             prompt = "Discard your changes? The draft stays in Drafts."
         else:

@@ -648,7 +648,7 @@ def test_file_path_completion_keeps_input_when_matches_diverge() -> None:
     assert completed == "/tmp/a"
 
 
-def test_send_keeps_bcc_out_of_transmitted_headers(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_send_keeps_bcc_out_of_transmitted_headers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Bcc recipients get the mail, but no recipient sees the Bcc header."""
     from email.mime.text import MIMEText
 
@@ -685,7 +685,7 @@ def test_send_keeps_bcc_out_of_transmitted_headers(monkeypatch: pytest.MonkeyPat
     )
     monkeypatch.setattr(compose_module.smtplib, "SMTP", FakeSMTP)
 
-    assert widget._send_message()
+    assert await widget._send_message()
 
     transmitted_headers = sent["data"].split("\n\n", 1)[0]
     assert "secret@example.com" not in transmitted_headers

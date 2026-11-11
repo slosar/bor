@@ -806,12 +806,13 @@ class MessageIndexWidget(BaseTab):
             self.bor_app._current_index = self._get_current_index()
             self.bor_app.open_message(msg)
 
-    def action_reply(self) -> None:
+    async def action_reply(self) -> None:
         """Reply to the selected message."""
         msg = self._get_current_message()
         if msg:
-            # Check if there are multiple recipients - need full message for CC info
-            full_msg = self.bor_app.mu.view(msg.path)
+            # Check if there are multiple recipients - need full message for CC
+            # info. Parsing it (and marking it read) is too slow for the UI thread.
+            full_msg = await asyncio.to_thread(self.bor_app.mu.view, msg.path)
             # Show reply options if there are CC recipients or multiple TO recipients
             if full_msg and (full_msg.cc_addrs or len(full_msg.to_addrs) > 1):
                 reply_bar = self.query_one("#reply-bar", ReplyBar)
@@ -835,8 +836,8 @@ class MessageIndexWidget(BaseTab):
         """Forward the selected message."""
         msg = self._get_current_message()
         if msg:
-            full_msg = self.bor_app.mu.view(msg.path, mark_as_read=False)
-            self.bor_app.open_compose(forward=full_msg or msg)
+            # The compose tab loads the full message (body, attachments) itself
+            self.bor_app.open_compose(forward=msg)
 
     def action_compose(self) -> None:
         """Compose a new message."""
@@ -893,8 +894,8 @@ class MessageIndexWidget(BaseTab):
         status = self.query_one("#status-label", Label)
         status.update("Updating index...")
 
-        # Run mu index
-        self.bor_app.mu.index()
+        # Run mu index (seconds on a large maildir; keep it off the UI thread)
+        await asyncio.to_thread(self.bor_app.mu.index)
 
         # Re-run current search
         if self._thread_anchor is not None or self.current_query:

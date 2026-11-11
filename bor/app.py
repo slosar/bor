@@ -8,6 +8,7 @@ between different views (message index, message view, compose, etc.)
 from __future__ import annotations
 
 import argparse
+import asyncio
 import gc
 import hashlib
 import os
@@ -215,6 +216,12 @@ class BorApp(App):
         # Focus after loading
         await self._focus_message_index()
         _tune_gc()
+        # Look up the root maildir (`mu info`) now, off the UI thread, rather
+        # than on the first archive or send.
+        try:
+            await asyncio.to_thread(self.mu.get_root_maildir)
+        except Exception:
+            pass
 
     def on_key(self, event: events.Key) -> None:
         """Handle key events for tab switching."""

@@ -136,13 +136,11 @@ class SyncWidget(BaseTab):
                 status.update("✓ Completed successfully")
                 output.write_line("\n--- Sync completed successfully ---")
 
-                # Re-index after successful sync
+                # Re-index and refresh the message list. (This used to run
+                # `mu index` here and again in the refresh, both on the UI thread.)
                 output.write_line("\nRunning mu index...")
-                self.bor_app.mu.index()
-                output.write_line("Index updated.")
-
-                # Refresh the message index if it exists
                 await self._refresh_message_index()
+                output.write_line("Index updated.")
 
                 # Close this tab after successful sync
                 self.close_tab()
@@ -163,17 +161,17 @@ class SyncWidget(BaseTab):
             self._process = None
 
     async def _refresh_message_index(self) -> None:
-        """Refresh the message index tab if it exists."""
-        try:
-            from bor.tabs.message_index import MessageIndexWidget
+        """Run `mu index` and refresh the message index tab."""
+        from bor.tabs.message_index import MessageIndexWidget
 
-            # Find the message index widget
-            index_widget = self.app.query_one("MessageIndexWidget", MessageIndexWidget)
-            if index_widget:
-                await index_widget.action_refresh()
+        try:
+            index_widget = self.app.query_one(MessageIndexWidget)
         except Exception:
-            # Message index might not exist or be mounted
-            pass
+            # No index to refresh; still bring mu up to date
+            await asyncio.to_thread(self.bor_app.mu.index)
+            return
+        # action_refresh() runs `mu index` on a worker thread, then re-queries
+        await index_widget.action_refresh()
 
     async def _cancel_sync(self) -> None:
         """Cancel the running sync process."""
