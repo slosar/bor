@@ -588,7 +588,7 @@ def test_compose_kill_line_appends_consecutive_kills_to_clipboard(
 
 
 def test_text_alias_completion_preserves_cursor_and_repaints_edit() -> None:
-    """Tab expansion should appear immediately without moving the cursor to the top."""
+    """Tab immediately expands an alias without moving the cursor to the top."""
     from textual import events
 
     editor = ComposeTextArea("first\nsecond x tail")
@@ -606,6 +606,47 @@ def test_text_alias_completion_preserves_cursor_and_repaints_edit() -> None:
     assert editor.text == "first\nsecond expanded tail"
     assert editor.cursor_location == (1, 15)
     assert refreshed_lines
+
+
+@pytest.mark.asyncio
+async def test_tab_after_non_alias_opens_expansion_picker() -> None:
+    """Tab after plain text offers expansions to insert at the cursor."""
+    from textual.app import App
+
+    editor = ComposeTextArea("hello ")
+    editor.set_aliases({"r": "Best regards,", "x": "expanded"})
+    editor.cursor_location = (0, 6)
+    refreshed_lines: list[tuple[int, int]] = []
+
+    def record_refresh(y: int, count: int = 1) -> None:
+        refreshed_lines.append((y, count))
+
+    editor.refresh_lines = record_refresh
+
+    class EditorApp(App):
+        def compose(self):
+            yield editor
+
+    app = EditorApp()
+    async with app.run_test() as pilot:
+        editor.focus()
+        await pilot.press("tab")
+
+        assert isinstance(app.screen, compose_module.TextExpansionScreen)
+        assert app.screen.query_one("#text-expansion-list").index == 0
+        assert len(app.screen.query_one("#text-expansion-list").children) == 2
+        assert editor.text == "hello "
+
+        await pilot.press("escape")
+        assert editor.text == "hello "
+
+        await pilot.press("tab")
+        await pilot.press("down", "enter")
+
+        assert editor.text == "hello expanded"
+        assert editor.cursor_location == (0, 14)
+        assert app.focused is editor
+        assert refreshed_lines
 
 
 def test_file_path_completion_returns_single_match() -> None:

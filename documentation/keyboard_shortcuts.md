@@ -223,8 +223,10 @@ In To/CC/BCC fields:
 - Cycles through matching contacts and aliases
 
 In body:
-- Type alias letter, press Tab to expand (configurable in [aliases])
-- Tab with no alias before the cursor moves to the To field (Shift+Tab in To comes back)
+- Type an alias letter and press Tab to expand it immediately (configurable in [aliases])
+- Tab after any other character opens the expansion picker
+- Choose an expansion with the arrow keys, press Enter to insert it at the cursor, or Escape to cancel
+- If no expansions are configured, Tab moves to the To field (Shift+Tab in To comes back)
 
 In attachment path input:
 - Ctrl+K deletes to end of line; Esc cancels

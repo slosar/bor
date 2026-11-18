@@ -30,6 +30,7 @@ from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.message import Message
 from textual.reactive import reactive
+from textual.screen import ModalScreen
 from textual.widgets import Input, Label, ListItem, ListView, Static, TextArea
 from textual.widgets.text_area import Edit, EditResult, Selection
 
@@ -499,6 +500,69 @@ class SubjectInput(InputEditingMixin, HeaderNavigationMixin, CtrlLMixin, Input):
             event.stop()
 
 
+class TextExpansionScreen(ModalScreen[str | None]):
+    """Choose a configured text expansion to insert in the message body."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
+    DEFAULT_CSS = """
+    TextExpansionScreen {
+        align: center middle;
+    }
+
+    #text-expansion-dialog {
+        width: 80;
+        max-width: 95%;
+        height: auto;
+        max-height: 80%;
+        padding: 1 2;
+        background: $panel;
+        border: solid $accent;
+    }
+
+    #text-expansion-title {
+        padding-bottom: 1;
+        text-style: bold;
+    }
+
+    #text-expansion-list {
+        height: auto;
+        max-height: 15;
+    }
+
+    #text-expansion-help {
+        padding-top: 1;
+        color: $text-muted;
+    }
+    """
+
+    def __init__(self, aliases: dict[str, str]) -> None:
+        super().__init__()
+        self._items = sorted(aliases.items())
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="text-expansion-dialog"):
+            yield Label("Text expansions", id="text-expansion-title")
+            yield ListView(
+                *[
+                    ListItem(Label(Text(f"{alias} → {expansion.replace(chr(10), ' ↵ ')}")))
+                    for alias, expansion in self._items
+                ],
+                id="text-expansion-list",
+            )
+            yield Static("Enter: insert   Esc: cancel", id="text-expansion-help")
+
+    def on_mount(self) -> None:
+        self.query_one("#text-expansion-list", ListView).focus()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.list_view.index is not None:
+            self.dismiss(self._items[event.list_view.index][1])
+
+
 class ComposeTextArea(CtrlLMixin, TextArea):
     """
     Text area for email body composition.
@@ -769,12 +833,8 @@ class ComposeTextArea(CtrlLMixin, TextArea):
                 if cursor[1] > 0:
                     char = line[cursor[1] - 1]
                     if char in self._aliases:
-                        # Expand alias
-                        expansion = self._aliases[char]
-                        # Use an edit rather than reloading the whole document so
-                        # the cursor and targeted repaint remain correct.
                         self.replace(
-                            expansion,
+                            self._aliases[char],
                             (cursor[0], cursor[1] - 1),
                             cursor,
                             maintain_selection_offset=False,
@@ -783,10 +843,21 @@ class ComposeTextArea(CtrlLMixin, TextArea):
                         event.stop()
                         return
 
-            # No alias to expand: wrap around to the To field. The default
-            # focus_next() would land on the tab strip, where typing and
-            # Ctrl+L do nothing.
-            self.query_ancestor(ComposeWidget).query_one("#to-input").focus()
+            if self._aliases:
+
+                def apply_expansion(expansion: str | None) -> None:
+                    if expansion is not None:
+                        self.replace(
+                            expansion,
+                            cursor,
+                            cursor,
+                            maintain_selection_offset=False,
+                        )
+
+                self.app.push_screen(TextExpansionScreen(self._aliases), apply_expansion)
+            else:
+                # With no configured expansions, preserve the original navigation.
+                self.query_ancestor(ComposeWidget).query_one("#to-input").focus()
             event.prevent_default()
             event.stop()
             return
@@ -1217,7 +1288,7 @@ class ComposeWidget(BaseTab):
 
             with Horizontal(classes="status-bar"):
                 yield Label(
-                    "Ctrl+L: L=Send D=Draft X=Cancel A=Attach Z=Bulk Attach | T/C/B/S/E=Jump | Tab=Next",
+                    "Ctrl+L: L=Send D=Draft X=Cancel A=Attach Z=Bulk Attach | T/C/B/S/E=Jump | Tab=Expansions",
                     id="status",
                 )
 

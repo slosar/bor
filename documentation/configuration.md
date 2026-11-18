@@ -262,7 +262,7 @@ helps it search for what you mean.
 
 ### [aliases]
 
-Text aliases for quick insertion in compose mode. Press the letter followed by Tab to expand.
+Text aliases for quick insertion in compose mode. Press the letter followed by Tab to expand it immediately. Tab after any other character opens an expansion picker; Enter inserts the selected expansion at the cursor, and Escape cancels.
 
 ```toml
 [aliases]
